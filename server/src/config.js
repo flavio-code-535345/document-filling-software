@@ -5,15 +5,19 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, '..'); // server/ (dev) or /app/server (container)
+const dataDir = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.resolve(rootDir, 'data');
 
 const config = {
   port: Number(process.env.PORT || 4000),
-  rootDir: path.resolve(__dirname, '..'),
-  dataDir: path.resolve(__dirname, '..', 'data'),
-  uploadDir: path.resolve(__dirname, '..', 'data', 'uploads'),
-  templateDir: path.resolve(__dirname, '..', 'data', 'templates'),
-  jobDir: path.resolve(__dirname, '..', 'data', 'jobs'),
-  auditFile: path.resolve(__dirname, '..', 'data', 'audit.log'),
+  rootDir,
+  dataDir,
+  uploadDir: path.join(dataDir, 'uploads'),
+  templateDir: path.join(dataDir, 'templates'),
+  jobDir: path.join(dataDir, 'jobs'),
+  auditFile: path.join(dataDir, 'audit.log'),
   publicWebUrl: process.env.PUBLIC_WEB_URL || '',
   signSessionTtlMs: Number(process.env.SIGN_SESSION_TTL_MINUTES || 10) * 60 * 1000,
   maxUploadMb: Number(process.env.MAX_UPLOAD_MB || 25),
@@ -27,7 +31,9 @@ const config = {
     from: process.env.SMTP_FROM || '',
   },
   dispatchWebhookUrl: process.env.DISPATCH_WEBHOOK_URL || '',
-  webDist: path.resolve(__dirname, '..', '..', 'web', 'dist'),
+  // Frontend static build. Resolves to: repo/web/dist (dev) or /app/web/dist (container)
+  // because the runtime image mirrors the repo layout (server/ and web/ as siblings).
+  webDist: process.env.WEB_DIST ? path.resolve(process.env.WEB_DIST) : path.resolve(rootDir, '..', 'web', 'dist'),
 };
 
 export default config;

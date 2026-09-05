@@ -1,6 +1,6 @@
 services:
   docflow:
-    image: flavio-code-535345/docflow:latest
+    image: flavio11113/docflow:latest
     pull_policy: always
     container_name: docflow
     restart: unless-stopped
@@ -8,7 +8,8 @@ services:
       - "4000:4000"
     environment:
       - PORT=4000
-      - PUBLIC_WEB_URL=
+      - DATA_DIR=/data
+      - PUBLIC_WEB_URL=http://192.168.178.45:4000
       - SIGN_SESSION_TTL_MINUTES=10
       - MAX_UPLOAD_MB=25
       - OPENAI_API_KEY=
