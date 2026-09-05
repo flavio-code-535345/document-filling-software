@@ -10,9 +10,6 @@ on:
 jobs:
   test:
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: powershell
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,22 +28,15 @@ jobs:
         working-directory: web
         run: npm install
 
-      - name: Run server selftest
+      - name: Run all tests
         working-directory: server
-        run: node scripts/selftest.js
-
-      - name: Run WS smoke test
-        working-directory: server
-        run: node scripts/ws-smoke.js
-
-      - name: Run E2E API test
-        working-directory: server
-        run: node scripts/e2e-api.js
+        run: |
+          node scripts/selftest.js
+          node scripts/ws-smoke.js
+          node scripts/e2e-api.js
 
       - name: Docker build and push
-        if: >
-          github.event_name == 'workflow_dispatch' ||
-          (github.event.action == 'closed' && github.event.pull_request.merged == true)
+        if: github.event_name == 'workflow_dispatch'
         env:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
