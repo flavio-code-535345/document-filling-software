@@ -1,8 +1,0 @@
-node_modules
-data
-*.log
-.env
-docker-compose.yml
-Dockerfile
-.git
-.gitignore
