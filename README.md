@@ -163,3 +163,5 @@ upload limits, OpenAI (AI detection), SMTP (email dispatch), webhook URL.
 - OCR pipeline (Tesseract/Azure) for scanned paper → template
 - Template versioning UI + diff rollback
 - Hosted e-sign provider bridge (DocuSign/Stripe Identity style hand-off)
+C I   t e s t   u p d a t e  
+ 
