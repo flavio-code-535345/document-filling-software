@@ -1,0 +1,27 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - PUBLIC_WEB_URL=http://host.docker.internal:5173
+      - SIGN_SESSION_TTL_MINUTES=10
+    volumes:
+      - ./server/data:/app/data:cached
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:4000/api
+      - VITE_SOCKET_URL=http://localhost:4000
+    depends_on:
+      - server
+    restart: unless-stopped
