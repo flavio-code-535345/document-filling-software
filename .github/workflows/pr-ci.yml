@@ -1,4 +1,4 @@
-name: PR CI + Docker Hub
+name: Build + Docker Hub
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -20,20 +20,18 @@ jobs:
           node-version: 24
           cache: 'npm'
 
-      - name: Install server dependencies
-        working-directory: server
+      - name: Install dependencies
         run: npm ci
 
-      - name: Run all tests
-        working-directory: server
-        run: |
-          node scripts/selftest.js
-          node scripts/ws-smoke.js
-          node scripts/e2e-api.js
+      - name: Build (typecheck + standalone)
+        env:
+          AUTH_SECRET: ci-placeholder-0123456789abcdef0123456789abcdef
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run build
 
   docker:
-    needs: test
-    if: github.ref == 'refs/heads/main'
+    needs: build
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

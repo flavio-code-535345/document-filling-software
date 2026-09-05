@@ -1,8 +1,10 @@
 node_modules/
-dist/
-server/data/
-server/uploads/
+.next/
+out/
+data/
 *.log
 .env
+.env.*
+!.env.example
 .DS_Store
 Thumbs.db

@@ -1,21 +1,24 @@
 # AGENTS.md
 
 ## Project
-DocFlow — PDF template automation studio. Monorepo, no workspace tool: `server/` (Express + Socket.io + pdf-lib, ESM) and `web/` (React 18 + Vite).
+DocFlow (Vordruckwerk) — self-hosted PDF form-filling engine. Next.js 16 App Router, TypeScript strict, React 19, Tailwind CSS 4 (dark theme). Single Docker container, file-based persistence. UI text in German, code/comments in English.
 
 ## Commands
-- Dev: `npm --prefix server run dev` (:4000) and `npm --prefix web run dev` (:5173, proxies /api + /socket.io)
-- Build: `npm --prefix web run build` (server then serves `web/dist` statically)
-- Tests: `npm --prefix server run selftest | test:ws | test:e2e` — run all three after changing engine, gateway, or routes.
+- Dev: `npm run dev` (:3000). Requires `.env` (or env vars): `AUTH_SECRET` (≥32 chars), optional `DATA_DIR`.
+- Build: `npm run build` → standalone output (`output: "standalone"` for Docker).
+- Tests (manual smoke): boot dev server, or `node .next/standalone/server.js` after build. (No unit-test framework pinned yet.)
 
 ## Conventions
-- Server is ESM (`"type": "module"`); use `import`, `.js` extensions in relative imports.
-- Field coordinates: PDF points, TOP-LEFT origin everywhere except inside `pdfEngine.js` which converts to bottom-left for pdf-lib. Keep it that way.
-- Runtime data lives in `server/data/` (gitignored) — templates, jobs, audit.log. Never commit it.
-- Socket events are namespaced `session:*` / `signature:*`; payloads always validated server-side in `signatureGateway.js`.
-- No database: persistence goes through `store/fileStore.js`; sessions through `store/sessionStore.js` (Redis-swap documented inside).
-- Keep dependencies minimal; no UI framework on the web side.
+- `lib/types.ts` is the single source of truth for the domain model.
+- Persistence: `$DATA_DIR/store.json` + `$DATA_DIR/templates/<uuid>.pdf`. Never commit `data/`.
+- Auth: password scrypt (`scrypt:salt:hash`), sessions = HMAC token cookie `vw_session` (7d). Secret from `AUTH_SECRET`; fails loudly at request time, never at build time.
+- All API routes: Route Handlers, `export const runtime = "nodejs"`, German errors `{ error: "..." }` via `lib/api.ts`.
+- Field coordinates: PDF points, TOP-LEFT origin. Server fill (`lib/pdf/fill.ts`) and browser previews (SVG) both use `lib/geometry.ts` — keep the math in sync there only.
+- pdfjs-dist v6: `getDocument({ url })`, `page.render({ canvas, viewport })`; worker in `public/` (postinstall script `scripts/copy-pdf-worker.mjs`). Load pdfjs only via `lib/pdf/client.ts`.
+- React 19 gotchas: no `ref.current` writes during render; no sync `setState` in effect bodies; cancel previous `page.render()` tasks before re-render (StrictMode-safe).
+- Sticky UI: app navbar is `top-0 z-40`; page toolbars stick at `top-16`.
+- Email (nodemailer) is best-effort: log errors, never block downloads.
 
 ## Environment
-- Node.js ≥ 18.17 required. In this workspace, if `node` is not on PATH, a portable copy lives at `C:\Users\Flavio\AppData\Local\Temp\opencode\nodejs` — prefix `$env:PATH` in each PowerShell call.
-- Server env vars: see `server/.env.example`.
+- Node ≥ 20 (Docker: node:24-alpine). In this workspace, if `node` is not on PATH, a portable copy lives at `C:\Users\Flavio\AppData\Local\Temp\opencode\nodejs` — prefix `$env:PATH` in each PowerShell call.
+- Deploy notes: register the admin immediately after first deploy (only the FIRST registered user becomes admin); put HTTPS in front; then `COOKIE_SECURE=true`.

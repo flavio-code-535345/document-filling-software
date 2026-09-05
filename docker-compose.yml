@@ -5,23 +5,15 @@ services:
     container_name: docflow
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "4458:3000"
     environment:
-      - PORT=4000
-      - DATA_DIR=/data
-      - PUBLIC_WEB_URL=http://192.168.178.45:4000
-      - SIGN_SESSION_TTL_MINUTES=10
-      - MAX_UPLOAD_MB=25
-      - GEMINI_API_KEY=
-      - GEMINI_MODEL=gemini-2.0-flash
-      - SMTP_HOST=
-      - SMTP_PORT=587
-      - SMTP_USER=
-      - SMTP_PASS=
-      - SMTP_FROM=
-      - DISPATCH_WEBHOOK_URL=
+      # Min. 32 Zeichen! Generiere z. B. mit: openssl rand -hex 32
+      - AUTH_SECRET=${AUTH_SECRET}
+      - DATA_DIR=/app/data
+      # Hinter HTTPS (Reverse-Proxy) auf "true" setzen.
+      - COOKIE_SECURE=false
     volumes:
-      - docflow_data:/data
+      - docflow_data:/app/data
 
 
 volumes:
