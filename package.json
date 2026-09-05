@@ -1,0 +1,13 @@
+{
+  "name": "docflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DocFlow - PDF template automation, bulk document generation and live QR mobile signatures",
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:web": "npm --prefix server run dev & npm --prefix web run dev",
+    "start": "npm --prefix server run start",
+    "build": "npm --prefix web run build",
+    "selftest": "npm --prefix server run selftest"
+  }
+}
