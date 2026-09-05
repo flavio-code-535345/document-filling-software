@@ -1,0 +1,55 @@
+name: PR CI
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm install
+
+      - name: Run server selftest
+        working-directory: server
+        run: node scripts/selftest.js
+
+      - name: Run WS smoke test
+        working-directory: server
+        run: node scripts/ws-smoke.js
+
+      - name: Run E2E API test
+        working-directory: server
+        run: node scripts/e2e-api.js
+
+      - name: Docker build and push (if secrets provided)
+        if: env.DOCKER_USERNAME != '' && env.DOCKER_PASSWORD != ''
+        run: |
+          echo "$env:DOCKER_PASSWORD" | docker login -u "$env:DOCKER_USERNAME" --password-stdin docker.io
+          docker build -t "$env:DOCKER_USERNAME/docflow:pr-${{ github.run_number }}" ./server
+          docker push "$env:DOCKER_USERNAME/docflow:pr-${{ github.run_number }}"
+
+      - name: Fail if any test failed
+        if: failure()
+        run: exit 1
