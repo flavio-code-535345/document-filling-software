@@ -1,8 +1,11 @@
-name: PR CI
+name: PR CI + Docker Hub
 
 on:
   pull_request:
     branches: [ main ]
+  pull_request_types:
+    - closed
+  workflow_dispatch:
 
 jobs:
   test:
@@ -40,8 +43,16 @@ jobs:
         working-directory: server
         run: node scripts/e2e-api.js
 
-      - name: Docker build and push (if secrets provided)
-        if: env.DOCKER_USERNAME != '' && env.DOCKER_PASSWORD != ''
+      - name: Cache Docker context
+        uses: actions/cache@v4
+        with:
+          path: /root/.docker
+          key: docker-context-${{ runner.os }}-${{ hashFiles('**/server/Dockerfile') }}
+
+      - name: Docker build and push (if merged + secrets provided)
+        if: >
+          github.event.action == 'closed' && github.event.pull_request.merged == true &&
+          env.DOCKER_USERNAME != '' && env.DOCKER_PASSWORD != ''
         run: |
           echo "$env:DOCKER_PASSWORD" | docker login -u "$env:DOCKER_USERNAME" --password-stdin docker.io
           docker build -t "$env:DOCKER_USERNAME/docflow:pr-${{ github.run_number }}" ./server
@@ -50,3 +61,28 @@ jobs:
       - name: Fail if any test failed
         if: failure()
         run: exit 1
+
+  # Optional: always run Docker push on workflow dispatch (manual trigger)
+  docker-manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: powershell
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Docker build and push (manual)
+        if: env.DOCKER_USERNAME != '' && env.DOCKER_PASSWORD != ''
+        run: |
+          echo "$env:DOCKER_PASSWORD" | docker login -u "$env:DOCKER_USERNAME" --password-stdin docker.io
+          docker build -t "$env:DOCKER_USERNAME/docflow:manual-${{ github.run_number }}" ./server
+          docker push "$env:DOCKER_USERNAME/docflow:manual-${{ github.run_number }}"
