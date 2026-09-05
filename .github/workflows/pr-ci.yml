@@ -3,8 +3,7 @@ name: PR CI + Docker Hub
 on:
   pull_request:
     branches: [ main ]
-  pull_request_types:
-    - closed
+    types: [closed]
   workflow_dispatch:
 
 jobs:
