@@ -95,7 +95,7 @@ export default function TemplateEditor({ template, onSaved }) {
         ))}
         <span className="spacer" />
         <button onClick={() => autodetect(false)} title="Reads fillable AcroForm widgets from the PDF">Auto-detect</button>
-        <button onClick={() => autodetect(true)} title="Uses a multimodal AI model (requires OPENAI_API_KEY on the server)">AI detect ✨</button>
+        <button onClick={() => autodetect(true)} title="Uses Google Gemini (requires GEMINI_API_KEY on the server)">AI detect ✨</button>
         <button className="primary" onClick={save}>Save schema</button>
       </div>
 

@@ -10,7 +10,7 @@ import { rid } from '../utils/text.js';
  *   widget's rectangle and map it to a DocFlow field — zero manual drawing.
  *
  * Strategy 2 (optional, AI): a multimodal model inspects page renders and
- *   proposes fields for scanned/flat PDFs. Enabled when OPENAI_API_KEY is set.
+ *   proposes fields for scanned/flat PDFs. Enabled when GEMINI_API_KEY is set.
  *   The provider is intentionally isolated so a different vision backend
  *   (Azure Document Intelligence, Google Document AI) can be plugged in.
  */
@@ -74,12 +74,12 @@ export async function detectAcroFormFields(templateBytes) {
 
 /**
  * AI vision provider (optional). Renders nothing server-side; instead it sends
- * the raw PDF to a multimodal endpoint that accepts PDF input and asks for
- * field proposals as JSON. Disabled unless OPENAI_API_KEY is configured.
+ * the raw PDF to Google Gemini and asks for field proposals as JSON.
+ * Disabled unless GEMINI_API_KEY is configured.
  */
 export async function detectFieldsWithAI(templateBytes, pageSizes) {
-  if (!config.openaiApiKey) {
-    const err = new Error('AI provider not configured (set OPENAI_API_KEY)');
+  if (!config.geminiApiKey) {
+    const err = new Error('AI provider not configured (set GEMINI_API_KEY)');
     err.code = 'AI_NOT_CONFIGURED';
     throw err;
   }
@@ -90,30 +90,31 @@ Each item: { "tag": snake_case_name, "type": "text|date|signature|checkbox",
 Coordinates are PDF points with TOP-LEFT origin. Page sizes (pt): ${JSON.stringify(pageSizes)}.
 Detect underlined blanks, labeled boxes, date lines and signature lines.`;
 
-  const res = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.openaiApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: config.openaiModel,
-      input: [{
-        role: 'user',
-        content: [
-          { type: 'input_text', text: prompt },
-          {
-            type: 'input_file',
-            filename: 'template.pdf',
-            file_data: `data:application/pdf;base64,${Buffer.from(templateBytes).toString('base64')}`,
-          },
-        ],
-      }],
-    }),
-  });
-  if (!res.ok) throw new Error(`AI provider error: ${res.status} ${await res.text()}`);
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${config.geminiModel}:generateContent?key=${config.geminiApiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inline_data: {
+                mime_type: 'application/pdf',
+                data: Buffer.from(templateBytes).toString('base64'),
+              },
+            },
+          ],
+        }],
+        generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+      }),
+    }
+  );
+  if (!res.ok) throw new Error(`Gemini provider error: ${res.status} ${await res.text()}`);
+
   const data = await res.json();
-  const text = data.output_text || '';
+  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
   const json = JSON.parse(text.slice(text.indexOf('['), text.lastIndexOf(']') + 1));
   return json.map((f) => ({ id: rid('fld'), fontSize: 11, source: 'ai', ...f }));
 }

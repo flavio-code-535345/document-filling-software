@@ -21,8 +21,8 @@ const config = {
   publicWebUrl: process.env.PUBLIC_WEB_URL || '',
   signSessionTtlMs: Number(process.env.SIGN_SESSION_TTL_MINUTES || 10) * 60 * 1000,
   maxUploadMb: Number(process.env.MAX_UPLOAD_MB || 25),
-  openaiApiKey: process.env.OPENAI_API_KEY || '',
-  openaiModel: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
+  geminiModel: process.env.GEMINI_MODEL || 'gemini-2.0-flash',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 587),
