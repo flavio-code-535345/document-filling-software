@@ -370,12 +370,10 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                          <li>Token wird automatisch erkannt</li>
                        </ol>
                      </div>
-                   )}
-                 </div>
-                    )}
-                 </div>
-               );
-             })}
+                  )}
+                </div>
+              );
+            })}
 
             <p className="text-xs text-ink-dim">
               Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im
