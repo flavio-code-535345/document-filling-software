@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { readStore, withStore } from "@/lib/store";
 import { getSession, isAdmin } from "@/lib/session";
 import { jsonError } from "@/lib/api";
@@ -23,8 +24,9 @@ export async function GET(req: Request) {
       return jsonError("Keine Berechtigung.", 403);
     }
 
-    const codeVerifier = req.cookies.get("claude_pkce_verifier")?.value;
-    const storedState = req.cookies.get("claude_oauth_state")?.value;
+    const cookieStore = await cookies();
+    const codeVerifier = cookieStore.get("claude_pkce_verifier")?.value;
+    const storedState = cookieStore.get("claude_oauth_state")?.value;
 
     if (!codeVerifier || state !== storedState) {
       return jsonError("PKCE-Validierung fehlgeschlagen.", 400);
@@ -63,8 +65,8 @@ export async function GET(req: Request) {
       `${process.env.NEXTAUTH_URL || "http://localhost:3000"}/admin/settings?ai=success`
     );
 
-    response.cookies.delete("claude_pkce_verifier");
-    response.cookies.delete("claude_oauth_state");
+    cookieStore.delete("claude_pkce_verifier");
+    cookieStore.delete("claude_oauth_state");
 
     return response;
   } catch (err) {
