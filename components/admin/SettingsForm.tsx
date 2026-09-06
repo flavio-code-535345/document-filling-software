@@ -357,28 +357,17 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                     value={cfg.model}
                     onChange={(m) => patchProvider(p.id, "model", m)}
                   />
-                  {p.id === "anthropic" && (
-                    <div className="mt-3 flex gap-2 border-t border-line/50 pt-3">
-                      {cfg.cliToken ? (
-                        <>
-                          <span className="flex-1 text-xs text-green-400">✓ Mit Claude angemeldet</span>
-                          <button
-                            type="button"
-                            className="rounded bg-red-500/20 px-3 py-1 text-xs text-red-400 hover:bg-red-500/30"
-                            onClick={() => patchProvider(p.id, "cliToken", "")}
-                          >
-                            Abmelden
-                          </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          className="w-full rounded bg-accent/20 px-3 py-2 text-xs text-accent hover:bg-accent/30"
-                          onClick={() => window.location.href = "/api/auth/claude/authorize"}
-                        >
-                          Mit Claude anmelden
-                        </button>
-                      )}
+                   {p.id === "anthropic" && (
+                     <div className="mt-3 border-t border-line/50 pt-3 text-xs text-ink-dim">
+                       <p className="font-medium text-ink">Claude Pro/Max Anmeldung:</p>
+                       <ol className="mt-2 space-y-1 list-decimal list-inside">
+                         <li>Öffne Terminal/PowerShell</li>
+                         <li>Führe aus: <code className="bg-canvas px-1 rounded font-mono">claude auth login</code></li>
+                         <li>Melde dich mit deinem Pro/Max-Konto an</li>
+                         <li>Token wird automatisch erkannt</li>
+                       </ol>
+                     </div>
+                   )}
                     </div>
                   )}
                 </div>
