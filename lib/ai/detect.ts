@@ -25,7 +25,6 @@ export interface AIScanOptions {
   apiKey: string;
   model: string;
   region?: AIScanRegion;
-  cliToken?: string;
 }
 
 const PROVIDER_LABEL: Record<AIProvider, string> = {

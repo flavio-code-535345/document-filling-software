@@ -1,37 +1,12 @@
 // Resolves the active AI provider configuration from store settings, with
 // legacy single-key migration and per-provider env fallbacks.
 import type { AIProvider, Settings } from "../types";
-import fs from "node:fs";
-import path from "node:path";
-import os from "node:os";
 
 export interface ResolvedAIConfig {
   enabled: boolean;
   provider: AIProvider;
   apiKey: string;
   model: string;
-  cliToken?: string;
-}
-
-function getClaudeCliToken(): string | undefined {
-  if (process.env.ANTHROPIC_CLI_TOKEN) return process.env.ANTHROPIC_CLI_TOKEN;
-  
-  const possiblePaths = [
-    path.join(os.homedir(), ".anthropic", "credentials.json"),
-    path.join(process.env.APPDATA || "", "anthropic", "credentials.json"),
-  ];
-  
-  for (const filePath of possiblePaths) {
-    try {
-      if (fs.existsSync(filePath)) {
-        const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-        return data.accessToken || data.access_token;
-      }
-    } catch {
-      // Continue
-    }
-  }
-  return undefined;
 }
 
 const ENV_KEYS: Record<AIProvider, string> = {

@@ -50,69 +50,6 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const startClaudeOAuth = () => {
-    const generatePKCE = () => {
-      const array = new Uint8Array(32);
-      crypto.getRandomValues(array);
-      return btoa(String.fromCharCode(...array)).replace(/[+/=]/g, (c) =>
-        c === "+" ? "-" : c === "/" ? "_" : ""
-      );
-    };
-
-    const generateChallenge = async (verifier: string) => {
-      const encoder = new TextEncoder();
-      const data = encoder.encode(verifier);
-      const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-      const hashArray = Array.from(new Uint8Array(hashBuffer));
-      return btoa(String.fromCharCode(...hashArray)).replace(/[+/=]/g, (c) =>
-        c === "+" ? "-" : c === "/" ? "_" : ""
-      );
-    };
-
-    (async () => {
-      try {
-        const codeVerifier = generatePKCE();
-        const codeChallenge = await generateChallenge(codeVerifier);
-        const state = generatePKCE();
-
-        sessionStorage.setItem(`pkce_${state}`, codeVerifier);
-
-        const host = window.location.host;
-        const protocol = window.location.protocol.replace(":", "");
-        const redirectUri = `${protocol}://${host}/api/auth/claude-callback`;
-
-        const params = new URLSearchParams({
-          client_id: "50dd0d1c-4b95-484e-bfef-d44c895e4cbe",
-          redirect_uri: redirectUri,
-          response_type: "code",
-          state,
-          scope: "profile api-key inference",
-          code_challenge: codeChallenge,
-          code_challenge_method: "S256",
-        });
-
-        const authUrl = `https://claude.ai/oauth/authorize?${params.toString()}`;
-        const popup = window.open(authUrl, "claude-auth", "width=600,height=700");
-
-        const checkPopup = setInterval(() => {
-          if (!popup || popup.closed) {
-            clearInterval(checkPopup);
-            const urlParams = new URLSearchParams(window.location.search);
-            const token = urlParams.get("oauth_success");
-            const tokenValue = urlParams.get("token");
-            if (token && tokenValue) {
-              patchProvider("anthropic", "cliToken", tokenValue);
-              setMessage("Claude-Authentifizierung erfolgreich!");
-              window.history.replaceState({}, document.title, window.location.pathname);
-            }
-          }
-        }, 500);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "OAuth-Fehler");
-      }
-    })();
-  };
-
   const patch = (section: keyof Settings, key: string, value: string | number | boolean) => {
     setSettings((s) => ({
       ...s,
@@ -128,7 +65,7 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
     setSettings((s) => ({ ...s, ai: patchFn(s.ai) }));
   };
 
-  const patchProvider = (provider: AIProvider, key: "apiKey" | "model" | "cliToken", value: string) => {
+  const patchProvider = (provider: AIProvider, key: "apiKey" | "model", value: string) => {
     patchAI((ai) => ({
       ...ai,
       providers: {
@@ -357,23 +294,9 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                      value={cfg.model}
                      onChange={(m) => patchProvider(p.id, "model", m)}
                    />
-                   {p.id === "anthropic" && (
-                     <div className="mt-3 border-t border-line/50 pt-3 text-xs text-ink-dim">
-                       <p className="font-medium text-ink">Claude Pro/Max Anmeldung:</p>
-                       <ol className="mt-2 space-y-1 list-decimal list-inside">
-                         <li>Öffne Terminal/PowerShell</li>
-                         <li>
-                           Führe aus:{" "}
-                           <code className="bg-canvas px-1 rounded font-mono">claude auth login</code>
-                         </li>
-                         <li>Melde dich mit deinem Pro/Max-Konto an</li>
-                         <li>Token wird automatisch erkannt</li>
-                       </ol>
-                     </div>
-                  )}
-                </div>
-              );
-            })}
+                 </div>
+               );
+             })}
 
             <p className="text-xs text-ink-dim">
               Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im
