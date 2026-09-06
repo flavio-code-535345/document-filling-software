@@ -6,7 +6,7 @@
 // env var fallback.
 
 import type { FieldKind, TemplateField } from "../types";
-import { newId } from "../auth";
+import { newId } from "../auth.ts";
 
 const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature"];
 
@@ -14,16 +14,19 @@ const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "sign
 const MAX_PDF_BYTES = 15 * 1024 * 1024;
 
 const PROMPT = (pageSizes: { width: number; height: number }[]) => `Du bist ein Formular-Feld-Erkenner für ein PDF-Templating-System.
-Schau dir die PDF an und antworte NUR mit einem JSON-Array. Jedes Element ist ein Feld:
+Schau dir die PDF-Seiten an und antworte NUR mit einem JSON-Array. Jedes Element ist ein Feld:
 {
   "label": "deutscher Label-Name",
   "kind": "text|multiline|date|checkbox|signature",
   "page": 0-basierter Seitenindex,
-  "x": 0, "y": 0, "width": 0, "height": 0,
+  "x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0,
   "fontSize": 11
 }
-Koordinaten sind PDF-Punkte mit Ursprung OBEN LINKS. Seitengrößen (pt): ${JSON.stringify(pageSizes)}.
-Erkenne unterstrichene Lücken, beschriftete Kästchen, Datumszeilen, Unterschriftslinien. Nur Array, kein Markdown.`;
+WICHTIG: x, y, width und height sind RELATIVE Werte zwischen 0.0 und 1.0,
+bezogen auf Seitenbreite und Seitenhöhe (0,0 = oben links). 0.1 bedeutet 10% der Seite.
+Platziere jedes Rechteck GENAU auf die leere Fläche, in die hineingeschrieben werden
+soll (Linie/Lücke/Kasten), nicht auf das gedruckte Label daneben.
+Seitengrößen (pt): ${JSON.stringify(pageSizes)}. Nur Array, kein Markdown.`;
 
 export async function detectFieldsWithGemini(
   templateBytes: Uint8Array | Buffer,
@@ -102,7 +105,7 @@ export async function detectFieldsWithGemini(
     .filter((f): f is TemplateField => f !== null);
 }
 
-function sanitizeProposal(
+export function sanitizeProposal(
   raw: Record<string, unknown>,
   pageSizes: { width: number; height: number }[]
 ): TemplateField | null {
@@ -124,16 +127,43 @@ function sanitizeProposal(
   const pageW = pageSizes[p]?.width ?? 612;
   const pageH = pageSizes[p]?.height ?? 792;
 
+  // Coordinates are requested relative (0..1). If the model ignored that and
+  // answered in pixels of a 96-dpi page render, convert those instead.
+  const looksLikePixels = x > 1.5 || y > 1.5 || width > 1.5 || height > 1.5;
+  const pxScaleW = looksLikePixels ? (pageW * 96) / 72 : 1;
+  const pxScaleH = looksLikePixels ? (pageH * 96) / 72 : 1;
+
+  const xN = looksLikePixels ? x / pxScaleW : x;
+  const yN = looksLikePixels ? y / pxScaleH : y;
+  const wN = looksLikePixels ? width / pxScaleW : width;
+  const hN = looksLikePixels ? height / pxScaleH : height;
+
+  const xPt = Math.max(0, Math.min(1, xN)) * pageW;
+  const yPt = Math.max(0, Math.min(1, yN)) * pageH;
+  let wPt = Math.abs(wN) * pageW;
+  let hPt = Math.abs(hN) * pageH;
+
+  // Font size must physically fit inside the box (value has to be written in it).
+  let fontSize = Number.isFinite(Number(raw.fontSize)) ? Number(raw.fontSize) : 11;
+  fontSize = Math.min(16, Math.max(6, fontSize));
+  const minH = fontSize * 1.35;
+  if (hPt < minH) hPt = minH;
+  if (fontSize > hPt / 1.35) fontSize = Math.max(6, hPt / 1.35);
+  if (kind === "checkbox") {
+    hPt = Math.max(10, hPt);
+    wPt = Math.max(10, wPt);
+  }
+
   return {
     id: newId(),
     label: typeof raw.label === "string" && raw.label.trim() ? raw.label.trim() : "Feld",
     kind,
     page: p,
-    x: Math.round(Math.max(0, Math.min(x, pageW - 4)) * 100) / 100,
-    y: Math.round(Math.max(0, Math.min(y, pageH - 4)) * 100) / 100,
-    width: Math.round(Math.max(4, Math.min(width, pageW - x)) * 100) / 100,
-    height: Math.round(Math.max(4, Math.min(height, pageH - y)) * 100) / 100,
-    fontSize: Number.isFinite(Number(raw.fontSize)) ? Math.min(72, Math.max(5, Number(raw.fontSize))) : 11,
+    x: Math.round(Math.max(0, Math.min(xPt, pageW - 8)) * 100) / 100,
+    y: Math.round(Math.max(0, Math.min(yPt, pageH - 8)) * 100) / 100,
+    width: Math.round(Math.max(10, Math.min(wPt, pageW - xPt)) * 100) / 100,
+    height: Math.round(Math.max(8, Math.min(hPt, pageH - yPt)) * 100) / 100,
+    fontSize: Math.round(fontSize * 10) / 10,
     required: false,
   };
 }
