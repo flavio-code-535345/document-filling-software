@@ -1,12 +1,14 @@
 // Resolves the active AI provider configuration from store settings, with
 // legacy single-key migration and per-provider env fallbacks.
 import type { AIProvider, Settings } from "../types";
+import { getClaudeCliToken } from "./claude-cli-auth";
 
 export interface ResolvedAIConfig {
   enabled: boolean;
   provider: AIProvider;
   apiKey: string;
   model: string;
+  cliToken?: string;
 }
 
 const ENV_KEYS: Record<AIProvider, string> = {

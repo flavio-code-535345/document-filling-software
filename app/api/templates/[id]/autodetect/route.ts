@@ -42,6 +42,7 @@ export async function POST(
       apiKey: ai.apiKey,
       model: ai.model,
       region,
+      cliToken: ai.cliToken,
     });
 
     if (body.autoAdd && proposals.length > 0) {
