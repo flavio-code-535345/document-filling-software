@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 import { readStore, templatePdfPath, withStore } from "@/lib/store";
 import { getSession, isAdmin } from "@/lib/session";
 import { jsonError, jsonErrorFor, parseJsonBody } from "@/lib/api";
-import { detectFieldsWithGemini, type AIScanRegion } from "@/lib/ai/detect";
+import { detectFieldsWithAI, type AIScanRegion } from "@/lib/ai/detect";
+import { resolveAIConfig } from "@/lib/ai/config";
 
 export const runtime = "nodejs";
 
 /**
- * AI scan of a template PDF: proposes fillable fields via Gemini.
+ * AI scan of a template PDF: proposes fillable fields via the configured
+ * provider (Gemini / ChatGPT / Claude).
  * Body: { autoAdd?: boolean, region?: { page, x, y, width, height } } —
  * region restricts scanning to a marked rectangle (PDF points, top-left).
  * With autoAdd=true the proposals are merged into the template and saved.
@@ -32,15 +34,13 @@ export async function POST(
     }));
 
     const region = sanitizeRegion(body.region, template.pageSizes);
-
-    const ai = store.settings.ai ?? { enabled: false, apiKey: "", model: "gemini-2.0-flash" };
-    const apiKey = ai.apiKey || process.env.GEMINI_API_KEY || "";
-    const model = ai.model || process.env.GEMINI_MODEL || "gemini-2.0-flash";
+    const ai = resolveAIConfig(store.settings);
 
     const bytes = await readFile(templatePdfPath(template.fileName));
-    const proposals = await detectFieldsWithGemini(bytes, template.pageSizes, {
-      apiKey,
-      model,
+    const proposals = await detectFieldsWithAI(bytes, template.pageSizes, {
+      provider: ai.provider,
+      apiKey: ai.apiKey,
+      model: ai.model,
       region,
     });
 

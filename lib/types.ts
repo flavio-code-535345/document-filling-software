@@ -68,11 +68,24 @@ export interface AccessRequest {
   createdAt: string;
 }
 
+export type AIProvider = "gemini" | "openai" | "anthropic";
+
+export interface AIProviderConfig {
+  apiKey: string;
+  model: string;
+}
+
+export interface AISettings {
+  enabled: boolean;
+  provider: AIProvider;
+  providers: Record<AIProvider, AIProviderConfig>;
+}
+
 export interface Settings {
   general: { appName: string; appIcon: string };
   smtp: { host: string; port: number; secure: boolean; user: string; pass: string; from: string };
   pdf: { defaultFontSize: number; emailEnabled: boolean; emailTo: string };
-  ai: { enabled: boolean; apiKey: string; model: string };
+  ai: AISettings;
 }
 
 export interface Store {

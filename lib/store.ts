@@ -9,7 +9,15 @@ const DEFAULT_SETTINGS: Settings = {
   general: { appName: "DocFlow", appIcon: "📄" },
   smtp: { host: "", port: 587, secure: false, user: "", pass: "", from: "" },
   pdf: { defaultFontSize: 11, emailEnabled: false, emailTo: "" },
-  ai: { enabled: false, apiKey: "", model: "gemini-2.0-flash" },
+  ai: {
+    enabled: false,
+    provider: "gemini",
+    providers: {
+      gemini: { apiKey: "", model: "gemini-2.5-flash" },
+      openai: { apiKey: "", model: "gpt-4o-mini" },
+      anthropic: { apiKey: "", model: "claude-3-5-haiku-latest" },
+    },
+  },
 };
 
 const EMPTY_STORE: Store = {

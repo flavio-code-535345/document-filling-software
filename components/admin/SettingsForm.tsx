@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Settings } from "@/lib/types";
+import type { AIProvider, Settings } from "@/lib/types";
 
 const TABS = [
   { id: "general", label: "Allgemein" },
@@ -12,15 +12,26 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
-const AI_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.5-pro",
-  "gemini-2.0-flash",
+const AI_PROVIDERS: { id: AIProvider; label: string; models: string[] }[] = [
+  {
+    id: "gemini",
+    label: "Gemini (Google)",
+    models: ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"],
+  },
+  {
+    id: "openai",
+    label: "ChatGPT (OpenAI)",
+    models: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1"],
+  },
+  {
+    id: "anthropic",
+    label: "Claude (Anthropic)",
+    models: ["claude-3-5-haiku-latest", "claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest", "claude-opus-4"],
+  },
 ];
 
-function isKnownModel(m: string): m is (typeof AI_MODELS)[number] {
-  return (AI_MODELS as readonly string[]).includes(m);
+function isKnownModel(m: string, list: string[]): boolean {
+  return list.includes(m);
 }
 
 /** Tabbed admin settings with sticky save bar. App name syncs to the header
@@ -28,9 +39,6 @@ function isKnownModel(m: string): m is (typeof AI_MODELS)[number] {
 export default function SettingsForm({ settings: initial }: { settings: Settings }) {
   const [tab, setTab] = useState<TabId>("general");
   const [settings, setSettings] = useState(initial);
-  const [modelSelect, setModelSelect] = useState<string>(
-    isKnownModel(initial.ai.model) ? initial.ai.model : "custom"
-  );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -39,6 +47,24 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
     setSettings((s) => ({
       ...s,
       [section]: { ...s[section], [key]: value },
+    }));
+  };
+
+  const patchAI = (
+    patchFn: (
+      ai: NonNullable<Settings["ai"]>
+    ) => NonNullable<Settings["ai"]>
+  ) => {
+    setSettings((s) => ({ ...s, ai: patchFn(s.ai) }));
+  };
+
+  const patchProvider = (provider: AIProvider, key: "apiKey" | "model", value: string) => {
+    patchAI((ai) => ({
+      ...ai,
+      providers: {
+        ...ai.providers,
+        [provider]: { ...ai.providers[provider], [key]: value },
+      },
     }));
   };
 
@@ -210,50 +236,66 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
               />
               KI-Felderkennung aktivieren
             </label>
+
             <label className="block text-sm">
-              Google-Gemini-API-Schlüssel
-              <input
-                type="password"
-                className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
-                value={settings.ai.apiKey}
-                autoComplete="off"
-                placeholder="AIza…"
-                onChange={(e) => patch("ai", "apiKey", e.target.value)}
-              />
-            </label>
-            <label className="block text-sm">
-              Modell
+              Aktiver Anbieter
               <select
                 className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
-                value={modelSelect}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setModelSelect(value);
-                  if (value !== "custom") {
-                    patch("ai", "model", value);
-                  }
-                }}
+                value={settings.ai.provider}
+                onChange={(e) => patch("ai", "provider", e.target.value as AIProvider)}
               >
-                {AI_MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
+                {AI_PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
                   </option>
                 ))}
-                <option value="custom">Anderes Modell…</option>
               </select>
-              {modelSelect === "custom" && (
-                <input
-                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
-                  value={settings.ai.model}
-                  placeholder="z. B. gemini-2.5-flash-preview"
-                  onChange={(e) => patch("ai", "model", e.target.value)}
-                />
-              )}
             </label>
+
+            {AI_PROVIDERS.map((p) => {
+              const cfg = settings.ai.providers?.[p.id] ?? { apiKey: "", model: p.models[0] };
+              const active = settings.ai.provider === p.id;
+              return (
+                <div
+                  key={p.id}
+                  className={`space-y-3 rounded-lg border p-3 ${
+                    active ? "border-accent bg-accent/5" : "border-line"
+                  }`}
+                >
+                  <p className="flex items-center justify-between text-sm font-medium">
+                    {p.label}
+                    {active && (
+                      <span className="rounded bg-accent/20 px-1.5 py-0.5 text-xs text-accent">
+                        aktiv
+                      </span>
+                    )}
+                  </p>
+                  <label className="block text-xs text-ink-dim">
+                    API-Schlüssel
+                    <input
+                      type="password"
+                      className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+                      value={cfg.apiKey}
+                      autoComplete="off"
+                      placeholder={p.id === "gemini" ? "AIza…" : p.id === "openai" ? "sk-…" : "sk-ant-…"}
+                      onChange={(e) => patchProvider(p.id, "apiKey", e.target.value)}
+                    />
+                  </label>
+                  <ProviderModelSelect
+                    providerId={p.id}
+                    models={p.models}
+                    value={cfg.model}
+                    onChange={(m) => patchProvider(p.id, "model", m)}
+                  />
+                </div>
+              );
+            })}
+
             <p className="text-xs text-ink-dim">
               Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im
-              Dokument erkennt und automatisch als Felder anlegt. Alternativ kann der
-              Schlüssel als Umgebungsvariable <code>GEMINI_API_KEY</code> gesetzt werden.
+              Dokument erkennt und automatisch als Felder anlegt. Alternativ greifen die
+              Umgebungsvariablen <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code> und{" "}
+              <code>ANTHROPIC_API_KEY</code>.
             </p>
           </div>
         )}
@@ -273,5 +315,49 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
         </button>
       </div>
     </div>
+  );
+}
+
+function ProviderModelSelect({
+  providerId,
+  models,
+  value,
+  onChange,
+}: {
+  providerId: AIProvider;
+  models: string[];
+  value: string;
+  onChange: (model: string) => void;
+}) {
+  const [choice, setChoice] = useState<string>(isKnownModel(value, models) ? value : "custom");
+
+  return (
+    <label className="block text-xs text-ink-dim">
+      Modell
+      <select
+        className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+        value={choice}
+        onChange={(e) => {
+          const v = e.target.value;
+          setChoice(v);
+          if (v !== "custom") onChange(v);
+        }}
+      >
+        {models.map((m) => (
+          <option key={m} value={m}>
+            {m}
+          </option>
+        ))}
+        <option value="custom">Anderes Modell…</option>
+      </select>
+      {choice === "custom" && (
+        <input
+          className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+          value={value}
+          placeholder="Modellnamen eingeben"
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </label>
   );
 }

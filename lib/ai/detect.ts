@@ -1,16 +1,15 @@
-// AI field auto-detection via Google Gemini.
+// AI field auto-detection via Gemini, OpenAI (ChatGPT) or Anthropic (Claude).
 //
 // Scans the raw template PDF and proposes fillable fields (label, kind, page,
 // rect) in PDF points with TOP-LEFT origin — matching lib/geometry exactly.
-// The API key comes from the store settings (admin) or the GEMINI_API_KEY
-// env var fallback.
+// The API key comes from the store settings (admin) or env fallbacks.
 
-import type { FieldKind, TemplateField } from "../types";
+import type { AIProvider, FieldKind, TemplateField } from "../types";
 import { newId } from "../auth.ts";
 
 const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature"];
 
-// Gemini request payload cap (~20MB total): base64 inflates PDFs by 4/3.
+// Provider request payload cap (~20MB total): base64 inflates PDFs by 4/3.
 const MAX_PDF_BYTES = 15 * 1024 * 1024;
 
 export interface AIScanRegion {
@@ -20,6 +19,19 @@ export interface AIScanRegion {
   width: number;
   height: number;
 }
+
+export interface AIScanOptions {
+  provider: AIProvider;
+  apiKey: string;
+  model: string;
+  region?: AIScanRegion;
+}
+
+const PROVIDER_LABEL: Record<AIProvider, string> = {
+  gemini: "Gemini",
+  openai: "ChatGPT (OpenAI)",
+  anthropic: "Claude (Anthropic)",
+};
 
 const PROMPT = (
   pageSizes: { width: number; height: number }[],
@@ -44,28 +56,30 @@ soll (Linie/Lücke/Kasten), nicht auf das gedruckte Label daneben.${regionHint}
 Seitengrößen (pt): ${JSON.stringify(pageSizes)}. Nur Array, kein Markdown.`;
 };
 
-export async function detectFieldsWithGemini(
-  templateBytes: Uint8Array | Buffer,
-  pageSizes: { width: number; height: number }[],
-  {
-    apiKey,
-    model,
-    region,
-  }: { apiKey: string; model: string; region?: AIScanRegion }
-): Promise<TemplateField[]> {
-  if (!apiKey) {
-    const err = new Error("KI nicht konfiguriert (API-Schlüssel fehlt).") as Error & { code: string };
-    err.code = "AI_NOT_CONFIGURED";
-    throw err;
-  }
+function aiError(message: string, code: "AI_NOT_CONFIGURED" | "AI_REQUEST_FAILED"): never {
+  const err = new Error(message) as Error & { code: string };
+  err.code = code;
+  throw err;
+}
 
-  const bytes = Buffer.from(templateBytes);
-  if (bytes.length > MAX_PDF_BYTES) {
-    const err = new Error("Dokument ist zu groß für den KI-Scan (max. 15 MB).") as Error & { code: string };
-    err.code = "AI_REQUEST_FAILED";
-    throw err;
+function providerHttpError(provider: AIProvider, model: string, status: number, body: string): never {
+  const label = PROVIDER_LABEL[provider];
+  let message: string;
+  if (status === 404) {
+    message = `${label}-Modell „${model}" nicht gefunden — bitte anderes Modell wählen.`;
+  } else if (status === 401 || status === 403) {
+    message = `${label}-API-Schlüssel ist ungültig — bitte in den Einstellungen prüfen.`;
+  } else if (status === 429) {
+    message = `${label}-Limit erreicht — später erneut versuchen.`;
+  } else if (status === 413 || body.toLowerCase().includes("too large")) {
+    message = `${label}: Dokument zu groß für den Scan.`;
+  } else {
+    message = `${label}-Fehler ${status}: ${body.slice(0, 160)}`;
   }
+  aiError(message, "AI_REQUEST_FAILED");
+}
 
+async function callGemini(bytes: Buffer, prompt: string, apiKey: string, model: string): Promise<string> {
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -75,13 +89,8 @@ export async function detectFieldsWithGemini(
         contents: [
           {
             parts: [
-              { text: PROMPT(pageSizes, region) },
-              {
-                inline_data: {
-                  mime_type: "application/pdf",
-                  data: bytes.toString("base64"),
-                },
-              },
+              { text: prompt },
+              { inline_data: { mime_type: "application/pdf", data: bytes.toString("base64") } },
             ],
           },
         ],
@@ -90,39 +99,147 @@ export async function detectFieldsWithGemini(
     }
   );
 
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    let message: string;
-    if (res.status === 404) {
-      message = `Gemini-Modell „${model}" nicht gefunden — bitte anderes Modell in den Einstellungen wählen.`;
-    } else if (res.status === 400) {
-      message = body.includes("API key")
-        ? "Gemini-API-Schlüssel ist ungültig — bitte in den Einstellungen prüfen."
-        : `Gemini-Anfrage ungültig (${res.status}): ${body.slice(0, 160)}`;
-    } else if (res.status === 429) {
-      message = "Gemini-Limit erreicht — später erneut versuchen.";
-    } else {
-      message = `Gemini-Fehler ${res.status}: ${body.slice(0, 160)}`;
-    }
-    const err = new Error(message) as Error & { code: string };
-    err.code = "AI_REQUEST_FAILED";
-    throw err;
-  }
-
+  if (!res.ok) providerHttpError("gemini", model, res.status, await res.text().catch(() => ""));
   const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? "").join("") ?? "";
-  const start = text.indexOf("[");
-  const end = text.lastIndexOf("]");
-  if (start < 0 || end < 0) throw new Error("KI-Antwort konnte nicht gelesen werden.");
-  const parsed = JSON.parse(text.slice(start, end + 1));
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text ?? "")
+      .join("") ?? "";
+  void text;
+  return text;
+}
 
+async function callOpenAI(bytes: Buffer, prompt: string, apiKey: string, model: string): Promise<string> {
+  const res = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      input: [
+        {
+          role: "user",
+          content: [
+            { type: "input_text", text: prompt },
+            {
+              type: "input_file",
+              filename: "template.pdf",
+              file_data: `data:application/pdf;base64,${bytes.toString("base64")}`,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) providerHttpError("openai", model, res.status, await res.text().catch(() => ""));
+  const data = await res.json();
+  return data?.output_text ?? "";
+}
+
+async function callAnthropic(bytes: Buffer, prompt: string, apiKey: string, model: string): Promise<string> {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      system: prompt,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: {
+                type: "base64",
+                media_type: "application/pdf",
+                data: bytes.toString("base64"),
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!res.ok) providerHttpError("anthropic", model, res.status, await res.text().catch(() => ""));
+  const data = await res.json();
+  const blocks = Array.isArray(data?.content) ? data.content : [];
+  return blocks
+    .map((b: { type?: string; text?: string }) => (b?.type === "text" ? (b.text ?? "") : ""))
+    .join("");
+}
+
+/** Extract the JSON array from a model answer (tolerates markdown fences). */
+function parseFieldArray(text: string): Record<string, unknown>[] {
+  const fenced = text.replace(/```(?:json)?/g, "");
+  const start = fenced.indexOf("[");
+  const end = fenced.lastIndexOf("]");
+  if (start < 0 || end < 0) throw new Error("KI-Antwort konnte nicht gelesen werden.");
+  const parsed = JSON.parse(fenced.slice(start, end + 1));
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("KI hat keine Felder erkannt.");
   }
+  return parsed as Record<string, unknown>[];
+}
 
-  return parsed
+/** Run the AI scan with the given provider configuration. */
+export async function detectFieldsWithAI(
+  templateBytes: Uint8Array | Buffer,
+  pageSizes: { width: number; height: number }[],
+  { provider, apiKey, model, region }: AIScanOptions
+): Promise<TemplateField[]> {
+  if (!apiKey) {
+    aiError(
+      `${PROVIDER_LABEL[provider]} ist nicht konfiguriert (API-Schlüssel fehlt).`,
+      "AI_NOT_CONFIGURED"
+    );
+  }
+
+  const bytes = Buffer.from(templateBytes);
+  if (bytes.length > MAX_PDF_BYTES) {
+    aiError("Dokument ist zu groß für den KI-Scan (max. 15 MB).", "AI_REQUEST_FAILED");
+  }
+
+  const prompt = PROMPT(pageSizes, region);
+
+  let text: string;
+  switch (provider) {
+    case "gemini":
+      text = await callGemini(bytes, prompt, apiKey, model);
+      break;
+    case "openai":
+      text = await callOpenAI(bytes, prompt, apiKey, model);
+      break;
+    case "anthropic":
+      text = await callAnthropic(bytes, prompt, apiKey, model);
+      break;
+  }
+
+  return parseFieldArray(text)
     .map((raw) => sanitizeProposal(raw, pageSizes, region))
     .filter((f): f is TemplateField => f !== null);
+}
+
+/** Backwards-compatible alias for older callers. */
+export async function detectFieldsWithGemini(
+  templateBytes: Uint8Array | Buffer,
+  pageSizes: { width: number; height: number }[],
+  { apiKey, model, region }: { apiKey: string; model: string; region?: AIScanRegion }
+): Promise<TemplateField[]> {
+  return detectFieldsWithAI(templateBytes, pageSizes, {
+    provider: "gemini",
+    apiKey,
+    model,
+    region,
+  });
 }
 
 export function sanitizeProposal(
