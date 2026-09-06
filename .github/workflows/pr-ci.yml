@@ -46,13 +46,13 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-       - name: Build and push
-         uses: docker/build-push-action@v6
-         with:
-           context: .
-           file: ./Dockerfile
-           platforms: linux/amd64
-           push: true
-          tags: |
-            ${{ secrets.DOCKER_USERNAME }}/docflow:latest
-            ${{ secrets.DOCKER_USERNAME }}/docflow:${{ github.sha }}
+        - name: Build and push
+          uses: docker/build-push-action@v6
+          with:
+            context: .
+            file: ./Dockerfile
+            platforms: linux/amd64
+            push: true
+            tags: |
+              ${{ secrets.DOCKER_USERNAME }}/docflow:latest
+              ${{ secrets.DOCKER_USERNAME }}/docflow:${{ github.sha }}
