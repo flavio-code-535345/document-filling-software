@@ -26,7 +26,14 @@ const AI_PROVIDERS: { id: AIProvider; label: string; models: string[] }[] = [
   {
     id: "anthropic",
     label: "Claude (Anthropic)",
-    models: ["claude-3-5-haiku-latest", "claude-3-5-sonnet-latest", "claude-3-7-sonnet-latest", "claude-opus-4"],
+    models: [
+      "claude-opus-5",
+      "claude-sonnet-5",
+      "claude-3-7-sonnet-latest",
+      "claude-3-5-sonnet-latest",
+      "claude-3-5-haiku-latest",
+      "claude-opus-4",
+    ],
   },
 ];
 
