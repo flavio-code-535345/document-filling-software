@@ -3,14 +3,15 @@ import { readFile } from "node:fs/promises";
 import { readStore, templatePdfPath, withStore } from "@/lib/store";
 import { getSession, isAdmin } from "@/lib/session";
 import { jsonError, jsonErrorFor, parseJsonBody } from "@/lib/api";
-import { detectFieldsWithGemini } from "@/lib/ai/detect";
+import { detectFieldsWithGemini, type AIScanRegion } from "@/lib/ai/detect";
 
 export const runtime = "nodejs";
 
 /**
  * AI scan of a template PDF: proposes fillable fields via Gemini.
- * Body: { autoAdd?: boolean } — with autoAdd=true the proposals are merged
- * into the template and saved immediately.
+ * Body: { autoAdd?: boolean, region?: { page, x, y, width, height } } —
+ * region restricts scanning to a marked rectangle (PDF points, top-left).
+ * With autoAdd=true the proposals are merged into the template and saved.
  */
 export async function POST(
   req: Request,
@@ -25,7 +26,12 @@ export async function POST(
     const template = store.templates.find((t) => t.id === id);
     if (!template) return jsonError("Vorlage nicht gefunden.", 404);
 
-    const body = await parseJsonBody<{ autoAdd?: boolean }>(req).catch(() => ({ autoAdd: undefined }));
+    const body = await parseJsonBody<{ autoAdd?: boolean; region?: AIScanRegion }>(req).catch(() => ({
+      autoAdd: undefined,
+      region: undefined,
+    }));
+
+    const region = sanitizeRegion(body.region, template.pageSizes);
 
     const ai = store.settings.ai ?? { enabled: false, apiKey: "", model: "gemini-2.0-flash" };
     const apiKey = ai.apiKey || process.env.GEMINI_API_KEY || "";
@@ -35,6 +41,7 @@ export async function POST(
     const proposals = await detectFieldsWithGemini(bytes, template.pageSizes, {
       apiKey,
       model,
+      region,
     });
 
     if (body.autoAdd && proposals.length > 0) {
@@ -58,4 +65,19 @@ export async function POST(
     }
     return jsonErrorFor(err);
   }
+}
+
+function sanitizeRegion(
+  raw: AIScanRegion | undefined,
+  pageSizes: { width: number; height: number }[]
+): AIScanRegion | undefined {
+  if (!raw) return undefined;
+  const page = Math.min(Math.max(0, Math.floor(Number(raw.page) || 0)), Math.max(0, pageSizes.length - 1));
+  const pageW = pageSizes[page]?.width ?? 612;
+  const pageH = pageSizes[page]?.height ?? 792;
+  const x = Math.max(0, Math.min(Number(raw.x) || 0, pageW - 4));
+  const y = Math.max(0, Math.min(Number(raw.y) || 0, pageH - 4));
+  const width = Math.max(8, Math.min(Number(raw.width) || 8, pageW - x));
+  const height = Math.max(8, Math.min(Number(raw.height) || 8, pageH - y));
+  return { page, x, y, width, height };
 }

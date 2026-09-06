@@ -25,6 +25,15 @@ const TOOLS: { kind: FieldKind; label: string; icon: string }[] = [
   { kind: "matrix", label: "Matrix", icon: "▦" },
 ];
 
+export type ToolId = FieldKind | "ai-region";
+
+export interface PageRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export default function TemplateEditor({ template }: { template: StoredTemplate }) {
   const router = useRouter();
   const templateRef = useRef(template);
@@ -34,7 +43,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [pageSizes, setPageSizes] = useState(template.pageSizes);
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
-  const [activeTool, setActiveTool] = useState<FieldKind | null>(null);
+  const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(template.updatedAt);
@@ -77,7 +86,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   // ---- stamping ----
   const handlePageClick = useCallback(
     (pt: { x: number; y: number }) => {
-      if (!activeTool) return;
+      if (!activeTool || activeTool === "ai-region") return;
       if (activeTool === "matrix") {
         if (pendingMatrix) {
           // second click: bottom-right cell center → pitch
@@ -229,7 +238,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   };
 
   // ---- KI-Scan: Gemini erkennt Felder und legt sie automatisch an ----
-  const aiScan = async () => {
+  const aiScan = async (region?: PageRegion) => {
     setAiScanning(true);
     setAiMessage(null);
     setError(null);
@@ -237,7 +246,10 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       const res = await fetch(`/api/templates/${template.id}/autodetect`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoAdd: true }),
+        body: JSON.stringify({
+          autoAdd: true,
+          region: region ? { page: pageIndex, ...region } : undefined,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "KI-Scan fehlgeschlagen.");
@@ -245,7 +257,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       setDirty(true);
       setAiMessage(
         data.added > 0
-          ? `✨ KI hat ${data.added} Feld${data.added === 1 ? "" : "er"} erkannt und hinzugefügt — bitte prüfen und speichern.`
+          ? `✨ KI hat ${data.added} Feld${data.added === 1 ? "" : "er"} ${region ? "im markierten Bereich " : ""}erkannt und hinzugefügt — bitte prüfen und speichern.`
           : "KI hat keine Felder erkannt."
       );
     } catch (err) {
@@ -376,6 +388,22 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             {aiScanning ? "Scannt…" : "KI-Scan ✨"}
           </button>
 
+          <button
+            title="Bereich auf der Seite ziehen — KI scannt nur diesen Ausschnitt"
+            className={`rounded-lg border px-3 py-1.5 text-sm ${
+              activeTool === "ai-region"
+                ? "border-accent bg-accent/20"
+                : "border-line hover:border-accent"
+            }`}
+            disabled={busy || aiScanning}
+            onClick={() => {
+              setActiveTool(activeTool === "ai-region" ? null : "ai-region");
+              setPendingMatrix(null);
+            }}
+          >
+            🔍 KI-Bereich
+          </button>
+
           <span className="mx-1 h-5 border-l border-line" />
 
           <button
@@ -466,6 +494,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
                 setDirty(true);
               }}
               onCancelTool={cancelTool}
+              onRegionSelected={(region) => void aiScan(region)}
               onCellClick={(fieldId, row, col) => {
                 setFeinCell({ row, col });
                 setFeintuning(fieldId);

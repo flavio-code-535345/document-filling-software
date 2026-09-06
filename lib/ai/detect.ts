@@ -13,7 +13,22 @@ const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "sign
 // Gemini request payload cap (~20MB total): base64 inflates PDFs by 4/3.
 const MAX_PDF_BYTES = 15 * 1024 * 1024;
 
-const PROMPT = (pageSizes: { width: number; height: number }[]) => `Du bist ein Formular-Feld-Erkenner für ein PDF-Templating-System.
+export interface AIScanRegion {
+  page: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+const PROMPT = (
+  pageSizes: { width: number; height: number }[],
+  region?: AIScanRegion
+) => {
+  const regionHint = region
+    ? `\nWICHTIG: Erkenne NUR Felder, die INNERHALB des markierten Bereichs auf Seite ${region.page} liegen (Bereich in PDF-Punkten: x=${region.x}, y=${region.y}, w=${region.width}, h=${region.height}). Gib x/y/width/height RELATIV zu DIESEM Bereich an (0,0 = oben links des Bereichs, 1,1 = unten rechts).`
+    : "";
+  return `Du bist ein Formular-Feld-Erkenner für ein PDF-Templating-System.
 Schau dir die PDF-Seiten an und antworte NUR mit einem JSON-Array. Jedes Element ist ein Feld:
 {
   "label": "deutscher Label-Name",
@@ -25,13 +40,18 @@ Schau dir die PDF-Seiten an und antworte NUR mit einem JSON-Array. Jedes Element
 WICHTIG: x, y, width und height sind RELATIVE Werte zwischen 0.0 und 1.0,
 bezogen auf Seitenbreite und Seitenhöhe (0,0 = oben links). 0.1 bedeutet 10% der Seite.
 Platziere jedes Rechteck GENAU auf die leere Fläche, in die hineingeschrieben werden
-soll (Linie/Lücke/Kasten), nicht auf das gedruckte Label daneben.
+soll (Linie/Lücke/Kasten), nicht auf das gedruckte Label daneben.${regionHint}
 Seitengrößen (pt): ${JSON.stringify(pageSizes)}. Nur Array, kein Markdown.`;
+};
 
 export async function detectFieldsWithGemini(
   templateBytes: Uint8Array | Buffer,
   pageSizes: { width: number; height: number }[],
-  { apiKey, model }: { apiKey: string; model: string }
+  {
+    apiKey,
+    model,
+    region,
+  }: { apiKey: string; model: string; region?: AIScanRegion }
 ): Promise<TemplateField[]> {
   if (!apiKey) {
     const err = new Error("KI nicht konfiguriert (API-Schlüssel fehlt).") as Error & { code: string };
@@ -55,7 +75,7 @@ export async function detectFieldsWithGemini(
         contents: [
           {
             parts: [
-              { text: PROMPT(pageSizes) },
+              { text: PROMPT(pageSizes, region) },
               {
                 inline_data: {
                   mime_type: "application/pdf",
@@ -101,13 +121,14 @@ export async function detectFieldsWithGemini(
   }
 
   return parsed
-    .map((raw) => sanitizeProposal(raw, pageSizes))
+    .map((raw) => sanitizeProposal(raw, pageSizes, region))
     .filter((f): f is TemplateField => f !== null);
 }
 
 export function sanitizeProposal(
   raw: Record<string, unknown>,
-  pageSizes: { width: number; height: number }[]
+  pageSizes: { width: number; height: number }[],
+  region?: AIScanRegion
 ): TemplateField | null {
   if (!raw || typeof raw !== "object") return null;
   const kind = (typeof raw.kind === "string" ? raw.kind.toLowerCase() : "text") as FieldKind;
@@ -123,25 +144,41 @@ export function sanitizeProposal(
   }
 
   const pageCount = Math.max(1, pageSizes.length);
-  const p = Math.min(Math.max(0, Math.floor(page)), pageCount - 1);
+  const regionPage = region
+    ? Math.min(Math.max(0, Math.floor(region.page)), pageCount - 1)
+    : Math.min(Math.max(0, Math.floor(page)), pageCount - 1);
+  const p = region ? regionPage : regionPage;
   const pageW = pageSizes[p]?.width ?? 612;
   const pageH = pageSizes[p]?.height ?? 792;
 
+  // Effective coordinate space: the marked region (relative within it),
+  // otherwise the full page.
+  const spaceW = region ? Math.min(region.width, pageW) : pageW;
+  const spaceH = region ? Math.min(region.height, pageH) : pageH;
+  const offsetX = region ? Math.max(0, Math.min(region.x, pageW - 1)) : 0;
+  const offsetY = region ? Math.max(0, Math.min(region.y, pageH - 1)) : 0;
+
   // Coordinates are requested relative (0..1). If the model ignored that and
-  // answered in pixels of a 96-dpi page render, convert those instead.
+  // answered in pixels of a 96-dpi render, convert those instead.
   const looksLikePixels = x > 1.5 || y > 1.5 || width > 1.5 || height > 1.5;
-  const pxScaleW = looksLikePixels ? (pageW * 96) / 72 : 1;
-  const pxScaleH = looksLikePixels ? (pageH * 96) / 72 : 1;
+  const pxScaleW = looksLikePixels ? (spaceW * 96) / 72 : 1;
+  const pxScaleH = looksLikePixels ? (spaceH * 96) / 72 : 1;
 
   const xN = looksLikePixels ? x / pxScaleW : x;
   const yN = looksLikePixels ? y / pxScaleH : y;
   const wN = looksLikePixels ? width / pxScaleW : width;
   const hN = looksLikePixels ? height / pxScaleH : height;
 
-  const xPt = Math.max(0, Math.min(1, xN)) * pageW;
-  const yPt = Math.max(0, Math.min(1, yN)) * pageH;
-  let wPt = Math.abs(wN) * pageW;
-  let hPt = Math.abs(hN) * pageH;
+  const xPt = offsetX + Math.max(0, Math.min(1, xN)) * spaceW;
+  const yPt = offsetY + Math.max(0, Math.min(1, yN)) * spaceH;
+  let wPt = Math.abs(wN) * spaceW;
+  let hPt = Math.abs(hN) * spaceH;
+
+  if (region) {
+    // Keep proposals inside the marked region.
+    wPt = Math.min(wPt, offsetX + region.width - xPt);
+    hPt = Math.min(hPt, offsetY + region.height - yPt);
+  }
 
   // Font size must physically fit inside the box (value has to be written in it).
   let fontSize = Number.isFinite(Number(raw.fontSize)) ? Number(raw.fontSize) : 11;

@@ -6,6 +6,7 @@ import { preparePageRender } from "@/lib/pdf/client";
 import { snapAnchors } from "@/lib/geometry";
 import MatrixGrid from "./MatrixGrid";
 import PreviewSvg, { type PreviewValues } from "@/components/PreviewSvg";
+import type { PageRegion, ToolId } from "./TemplateEditor";
 
 const KIND_COLORS: Record<FieldKind, string> = {
   text: "#60a5fa",
@@ -38,6 +39,7 @@ export default function PdfPageView({
   onDeleteField,
   onCopyField,
   onCancelTool,
+  onRegionSelected,
   onCellClick,
 }: {
   pdfUrl: string;
@@ -46,7 +48,7 @@ export default function PdfPageView({
   zoom: number;
   fields: TemplateField[];
   selectedId: string | null;
-  activeTool: FieldKind | null;
+  activeTool: ToolId | null;
   feintuning: string | null;
   feinCell: { row: number; col: number } | null;
   previewEnabled: boolean;
@@ -57,12 +59,20 @@ export default function PdfPageView({
   onDeleteField: (id: string) => void;
   onCopyField: (id: string) => void;
   onCancelTool: () => void;
+  onRegionSelected: (region: PageRegion) => void;
   onCellClick?: (fieldId: string, row: number, col: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const regionStartRef = useRef<{ x: number; y: number } | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [regionRect, setRegionRect] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({
     x: null,
     y: null,
@@ -107,12 +117,22 @@ export default function PdfPageView({
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button === 2) return; // right click handled by contextmenu
+
+    const pt = toPt(e);
+
+    // KI-Bereich tool: drag a rectangle to scan only that region.
+    if (activeTool === "ai-region") {
+      regionStartRef.current = pt;
+      setRegionRect({ x: pt.x, y: pt.y, width: 0, height: 0 });
+      e.preventDefault();
+      containerRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
+
     const target = e.target as HTMLElement;
     const handle = target.dataset.handle;
     const fieldEl = target.closest<HTMLElement>("[data-field-id]");
     const fieldId = fieldEl?.dataset.fieldId;
-
-    const pt = toPt(e);
 
     if (fieldId && (handle || !activeTool)) {
       const field = fields.find((f) => f.id === fieldId);
@@ -142,6 +162,19 @@ export default function PdfPageView({
     if (activeTool) {
       setCursor({ x: e.clientX, y: e.clientY });
     }
+
+    if (activeTool === "ai-region" && regionStartRef.current) {
+      const pt = toPt(e);
+      const start = regionStartRef.current;
+      setRegionRect({
+        x: Math.min(start.x, pt.x),
+        y: Math.min(start.y, pt.y),
+        width: Math.abs(pt.x - start.x),
+        height: Math.abs(pt.y - start.y),
+      });
+      return;
+    }
+
     const drag = dragRef.current;
     if (!drag) return;
 
@@ -180,6 +213,21 @@ export default function PdfPageView({
   };
 
   const endDrag = () => {
+    // Finish a KI-Bereich selection.
+    if (activeTool === "ai-region" && regionStartRef.current && regionRect) {
+      const rect = regionRect;
+      if (rect.width >= 6 && rect.height >= 6) {
+        onRegionSelected({
+          x: Math.round(rect.x * 100) / 100,
+          y: Math.round(rect.y * 100) / 100,
+          width: Math.round(rect.width * 100) / 100,
+          height: Math.round(rect.height * 100) / 100,
+        });
+      }
+      regionStartRef.current = null;
+      setRegionRect(null);
+      return;
+    }
     dragRef.current = null;
     setGuides({ x: null, y: null });
   };
@@ -363,8 +411,21 @@ export default function PdfPageView({
           />
         )}
 
+        {/* KI-Bereich drag rectangle */}
+        {regionRect && activeTool === "ai-region" && (
+          <div
+            className="pointer-events-none absolute z-30 border-2 border-dashed border-accent bg-accent/10"
+            style={{
+              left: regionRect.x * zoom,
+              top: regionRect.y * zoom,
+              width: regionRect.width * zoom,
+              height: regionRect.height * zoom,
+            }}
+          />
+        )}
+
         {/* Stamp cursor chip */}
-        {activeTool && cursor && (
+        {activeTool && activeTool !== "ai-region" && cursor && (
           <div
             className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-strong px-2 py-0.5 text-xs font-semibold text-white"
             style={{ left: cursor.x, top: cursor.y }}
