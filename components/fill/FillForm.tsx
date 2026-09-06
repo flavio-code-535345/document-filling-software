@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import type { FieldKind, FieldValue, StoredTemplate, TemplateField } from "@/lib/types";
-import PreviewSvg, { type PreviewValues } from "@/components/PreviewSvg";
+import type { PreviewValues } from "@/components/PreviewSvg";
+import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
 import SignatureInput from "./SignatureInput";
 
@@ -183,7 +184,7 @@ export default function FillForm({
           </button>
         </form>
 
-        {/* Sticky preview column */}
+        {/* Sticky preview column: the real PDF with filled values on top */}
         <div className="hidden lg:block">
           <div className="sticky top-24 space-y-6 self-start">
             {Array.from({ length: template.pageCount }, (_, i) => (
@@ -195,9 +196,10 @@ export default function FillForm({
                 <p className="border-b border-line bg-surface px-3 py-1 text-xs text-ink-dim">
                   Seite {i + 1}
                 </p>
-                <PreviewSvg
-                  pageWidth={template.pageSizes[i]?.width ?? 612}
-                  pageHeight={template.pageSizes[i]?.height ?? 792}
+                <PagePreview
+                  pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
+                  pageIndex={i}
+                  pageSize={template.pageSizes[i] ?? { width: 612, height: 792 }}
                   fields={(template.fields ?? []).filter((f) => f.page === i)}
                   values={previewValues}
                 />

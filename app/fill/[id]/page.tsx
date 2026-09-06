@@ -33,6 +33,7 @@ export default async function FillPage({
           pageCount: template.pageCount,
           pageSizes: template.pageSizes,
           fields: template.fields,
+          updatedAt: template.updatedAt,
         } as StoredTemplate
       }
       emailAvailable={emailAvailable}

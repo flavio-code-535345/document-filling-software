@@ -28,6 +28,9 @@ function isKnownModel(m: string): m is (typeof AI_MODELS)[number] {
 export default function SettingsForm({ settings: initial }: { settings: Settings }) {
   const [tab, setTab] = useState<TabId>("general");
   const [settings, setSettings] = useState(initial);
+  const [modelSelect, setModelSelect] = useState<string>(
+    isKnownModel(initial.ai.model) ? initial.ai.model : "custom"
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -222,10 +225,13 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
               Modell
               <select
                 className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
-                value={isKnownModel(settings.ai.model) ? settings.ai.model : "custom"}
+                value={modelSelect}
                 onChange={(e) => {
-                  if (e.target.value === "custom") return;
-                  patch("ai", "model", e.target.value);
+                  const value = e.target.value;
+                  setModelSelect(value);
+                  if (value !== "custom") {
+                    patch("ai", "model", value);
+                  }
                 }}
               >
                 {AI_MODELS.map((m) => (
@@ -235,10 +241,11 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                 ))}
                 <option value="custom">Anderes Modell…</option>
               </select>
-              {!isKnownModel(settings.ai.model) && (
+              {modelSelect === "custom" && (
                 <input
                   className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
                   value={settings.ai.model}
+                  placeholder="z. B. gemini-2.5-flash-preview"
                   onChange={(e) => patch("ai", "model", e.target.value)}
                 />
               )}
