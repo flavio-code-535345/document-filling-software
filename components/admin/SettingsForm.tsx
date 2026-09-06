@@ -351,28 +351,31 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                       onChange={(e) => patchProvider(p.id, "apiKey", e.target.value)}
                     />
                   </label>
-                  <ProviderModelSelect
-                    providerId={p.id}
-                    models={p.models}
-                    value={cfg.model}
-                    onChange={(m) => patchProvider(p.id, "model", m)}
-                  />
+                   <ProviderModelSelect
+                     providerId={p.id}
+                     models={p.models}
+                     value={cfg.model}
+                     onChange={(m) => patchProvider(p.id, "model", m)}
+                   />
                    {p.id === "anthropic" && (
                      <div className="mt-3 border-t border-line/50 pt-3 text-xs text-ink-dim">
                        <p className="font-medium text-ink">Claude Pro/Max Anmeldung:</p>
                        <ol className="mt-2 space-y-1 list-decimal list-inside">
                          <li>Öffne Terminal/PowerShell</li>
-                         <li>Führe aus: <code className="bg-canvas px-1 rounded font-mono">claude auth login</code></li>
+                         <li>
+                           Führe aus:{" "}
+                           <code className="bg-canvas px-1 rounded font-mono">claude auth login</code>
+                         </li>
                          <li>Melde dich mit deinem Pro/Max-Konto an</li>
                          <li>Token wird automatisch erkannt</li>
                        </ol>
                      </div>
                    )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                 </div>
+                    )}
+                 </div>
+               );
+             })}
 
             <p className="text-xs text-ink-dim">
               Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im
