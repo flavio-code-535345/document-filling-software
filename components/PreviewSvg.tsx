@@ -22,6 +22,7 @@ export default function PreviewSvg({
   values,
   selectedId,
   className,
+  transparent = false,
 }: {
   pageWidth: number;
   pageHeight: number;
@@ -29,12 +30,14 @@ export default function PreviewSvg({
   values: PreviewValues;
   selectedId?: string | null;
   className?: string;
+  /** Editor overlay sits ON TOP of the rendered PDF and must stay transparent. */
+  transparent?: boolean;
 }) {
   return (
     <svg
       viewBox={`0 0 ${pageWidth} ${pageHeight}`}
       className={className ?? "h-auto w-full"}
-      style={{ background: "#ffffff", color: "#000000" }}
+      style={transparent ? { color: "#000000" } : { background: "#ffffff", color: "#000000" }}
     >
       {fields.map((f) =>
         f.id === selectedId ? (

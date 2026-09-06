@@ -12,6 +12,17 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+const AI_MODELS = [
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-pro",
+  "gemini-2.0-flash",
+];
+
+function isKnownModel(m: string): m is (typeof AI_MODELS)[number] {
+  return (AI_MODELS as readonly string[]).includes(m);
+}
+
 /** Tabbed admin settings with sticky save bar. App name syncs to the header
  *  instantly via a window CustomEvent after save. */
 export default function SettingsForm({ settings: initial }: { settings: Settings }) {
@@ -209,11 +220,28 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
             </label>
             <label className="block text-sm">
               Modell
-              <input
+              <select
                 className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
-                value={settings.ai.model}
-                onChange={(e) => patch("ai", "model", e.target.value)}
-              />
+                value={isKnownModel(settings.ai.model) ? settings.ai.model : "custom"}
+                onChange={(e) => {
+                  if (e.target.value === "custom") return;
+                  patch("ai", "model", e.target.value);
+                }}
+              >
+                {AI_MODELS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+                <option value="custom">Anderes Modell…</option>
+              </select>
+              {!isKnownModel(settings.ai.model) && (
+                <input
+                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
+                  value={settings.ai.model}
+                  onChange={(e) => patch("ai", "model", e.target.value)}
+                />
+              )}
             </label>
             <p className="text-xs text-ink-dim">
               Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im

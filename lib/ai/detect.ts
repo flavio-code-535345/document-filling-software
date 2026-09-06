@@ -10,6 +10,9 @@ import { newId } from "../auth";
 
 const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature"];
 
+// Gemini request payload cap (~20MB total): base64 inflates PDFs by 4/3.
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+
 const PROMPT = (pageSizes: { width: number; height: number }[]) => `Du bist ein Formular-Feld-Erkenner für ein PDF-Templating-System.
 Schau dir die PDF an und antworte NUR mit einem JSON-Array. Jedes Element ist ein Feld:
 {
@@ -33,6 +36,13 @@ export async function detectFieldsWithGemini(
     throw err;
   }
 
+  const bytes = Buffer.from(templateBytes);
+  if (bytes.length > MAX_PDF_BYTES) {
+    const err = new Error("Dokument ist zu groß für den KI-Scan (max. 15 MB).") as Error & { code: string };
+    err.code = "AI_REQUEST_FAILED";
+    throw err;
+  }
+
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
     {
@@ -46,7 +56,7 @@ export async function detectFieldsWithGemini(
               {
                 inline_data: {
                   mime_type: "application/pdf",
-                  data: Buffer.from(templateBytes).toString("base64"),
+                  data: bytes.toString("base64"),
                 },
               },
             ],
@@ -59,15 +69,20 @@ export async function detectFieldsWithGemini(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    const err = new Error(
-      res.status === 400
-        ? "Gemini-Konfiguration ungültig — API-Schlüssel oder Modell prüfen."
-        : res.status === 429
-          ? "Gemini-Limit erreicht — später erneut versuchen."
-          : `Gemini-Fehler: ${res.status}`
-    ) as Error & { code: string };
+    let message: string;
+    if (res.status === 404) {
+      message = `Gemini-Modell „${model}" nicht gefunden — bitte anderes Modell in den Einstellungen wählen.`;
+    } else if (res.status === 400) {
+      message = body.includes("API key")
+        ? "Gemini-API-Schlüssel ist ungültig — bitte in den Einstellungen prüfen."
+        : `Gemini-Anfrage ungültig (${res.status}): ${body.slice(0, 160)}`;
+    } else if (res.status === 429) {
+      message = "Gemini-Limit erreicht — später erneut versuchen.";
+    } else {
+      message = `Gemini-Fehler ${res.status}: ${body.slice(0, 160)}`;
+    }
+    const err = new Error(message) as Error & { code: string };
     err.code = "AI_REQUEST_FAILED";
-    void body;
     throw err;
   }
 

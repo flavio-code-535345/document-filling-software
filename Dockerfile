@@ -31,7 +31,9 @@ RUN mkdir -p /app/data
 
 EXPOSE 3000
 
+# Docker sets HOSTNAME=<container-id> and the standalone server binds to it,
+# so the probe must target that same hostname (falls back to 127.0.0.1).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://'+(process.env.HOSTNAME||'127.0.0.1')+':3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]

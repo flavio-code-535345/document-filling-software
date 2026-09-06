@@ -206,7 +206,7 @@ export default function PdfPageView({
           style={{ width: widthPx, height: heightPx }}
         />
 
-        {/* Live preview overlay (sample values) */}
+        {/* Live preview overlay (sample values, transparent over the PDF) */}
         {previewEnabled && (
           <div className="pointer-events-none absolute inset-0">
             <PreviewSvg
@@ -215,6 +215,7 @@ export default function PdfPageView({
               fields={fields}
               values={sampleValues}
               className="h-full w-full"
+              transparent
             />
           </div>
         )}
