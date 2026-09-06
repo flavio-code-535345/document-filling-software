@@ -128,7 +128,7 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
     setSettings((s) => ({ ...s, ai: patchFn(s.ai) }));
   };
 
-  const patchProvider = (provider: AIProvider, key: "apiKey" | "model", value: string) => {
+  const patchProvider = (provider: AIProvider, key: "apiKey" | "model" | "cliToken", value: string) => {
     patchAI((ai) => ({
       ...ai,
       providers: {

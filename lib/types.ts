@@ -73,6 +73,7 @@ export type AIProvider = "gemini" | "openai" | "anthropic";
 export interface AIProviderConfig {
   apiKey: string;
   model: string;
+  cliToken?: string;
 }
 
 export interface AISettings {
