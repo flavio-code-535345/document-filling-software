@@ -35,6 +35,11 @@ const AI_PROVIDERS: { id: AIProvider; label: string; models: string[] }[] = [
       "claude-opus-4",
     ],
   },
+  {
+    id: "ollama",
+    label: "Ollama (Lokal, Vision)",
+    models: ["qwen2.5-vl:7b", "minicpm-v", "llama3.2-vision:11b"],
+  },
 ];
 
 function isKnownModel(m: string, list: string[]): boolean {

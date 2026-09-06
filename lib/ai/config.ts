@@ -7,27 +7,33 @@ export interface ResolvedAIConfig {
   provider: AIProvider;
   apiKey: string;
   model: string;
+  ollamaUrl?: string;
 }
 
 const ENV_KEYS: Record<AIProvider, string> = {
   gemini: "GEMINI_API_KEY",
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY",
+  ollama: "OLLAMA_API_KEY",
 };
 
 const ENV_MODELS: Record<AIProvider, string> = {
   gemini: "GEMINI_MODEL",
   openai: "OPENAI_MODEL",
   anthropic: "ANTHROPIC_MODEL",
+  ollama: "OLLAMA_MODEL",
 };
 
 const DEFAULT_MODELS: Record<AIProvider, string> = {
   gemini: "gemini-2.5-flash",
   openai: "gpt-4o-mini",
   anthropic: "claude-3-5-haiku-latest",
+  ollama: "qwen2.5-vl:7b",
 };
 
-const PROVIDERS: AIProvider[] = ["gemini", "openai", "anthropic"];
+const PROVIDERS: AIProvider[] = ["gemini", "openai", "anthropic", "ollama"];
+
+const OLLAMA_DEFAULT_URL = "http://host.docker.internal:11434";
 
 export function normalizeProvider(value: unknown): AIProvider {
   return PROVIDERS.includes(value as AIProvider) ? (value as AIProvider) : "gemini";
@@ -56,6 +62,7 @@ export function resolveAIConfig(settings: Settings): ResolvedAIConfig {
       provider,
       apiKey: cfg.apiKey || process.env[ENV_KEYS[provider]] || "",
       model: cfg.model || process.env[ENV_MODELS[provider]] || DEFAULT_MODELS[provider],
+      ollamaUrl: process.env.OLLAMA_HOST || OLLAMA_DEFAULT_URL,
     };
   }
 

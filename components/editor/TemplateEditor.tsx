@@ -54,7 +54,6 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [busy, setBusy] = useState(false);
   const [aiScanning, setAiScanning] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
-  const [localScanning, setLocalScanning] = useState(false);
 
   // Matrix two-click stamping
   const [pendingMatrix, setPendingMatrix] = useState<{
@@ -268,33 +267,6 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     }
   };
 
-  // ---- Lokal-Scan: eingebettete Formularfelder ohne Cloud-AI erkennen ----
-  const localScan = async () => {
-    setLocalScanning(true);
-    setAiMessage(null);
-    setError(null);
-    try {
-      const res = await fetch(`/api/templates/${template.id}/local-detect`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ autoAdd: true }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || "Lokal-Scan fehlgeschlagen.");
-      setFields((fs) => [...fs, ...data.fields]);
-      setDirty(true);
-      setAiMessage(
-        data.added > 0
-          ? `🔎 Lokal ${data.added} Feld${data.added === 1 ? "" : "er"} erkannt und hinzugefügt — bitte prüfen und speichern.`
-          : "Keine eingebetteten Formularfelder gefunden (PDF enthält kein AcroForm)."
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Lokal-Scan fehlgeschlagen.");
-    } finally {
-      setLocalScanning(false);
-    }
-  };
-
   // ---- PDF ersetzen ----
   const replacePdf = async (file: File) => {
     setBusy(true);
@@ -414,15 +386,6 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             onClick={() => void aiScan()}
           >
             {aiScanning ? "Scannt…" : "KI-Scan ✨"}
-          </button>
-
-          <button
-            title="Liest eingebettete Formularfelder (AcroForm) ohne Cloud-AI aus"
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            disabled={busy || localScanning}
-            onClick={() => void localScan()}
-          >
-            {localScanning ? "Scanne…" : "Lokal-Scan 🔎"}
           </button>
 
           <button
