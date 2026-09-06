@@ -12,6 +12,8 @@ services:
       - DATA_DIR=/app/data
       # Hinter HTTPS (Reverse-Proxy) auf "true" setzen.
       - COOKIE_SECURE=false
+      # Optional: Gemini-Key für die KI-Felderkennung (alternativ: Einstellungen → KI)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     volumes:
       - docflow_data:/app/data
 

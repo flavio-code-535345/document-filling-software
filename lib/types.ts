@@ -72,6 +72,7 @@ export interface Settings {
   general: { appName: string; appIcon: string };
   smtp: { host: string; port: number; secure: boolean; user: string; pass: string; from: string };
   pdf: { defaultFontSize: number; emailEnabled: boolean; emailTo: string };
+  ai: { enabled: boolean; apiKey: string; model: string };
 }
 
 export interface Store {

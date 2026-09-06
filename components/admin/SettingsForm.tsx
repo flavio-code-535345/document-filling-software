@@ -7,6 +7,7 @@ const TABS = [
   { id: "general", label: "Allgemein" },
   { id: "pdf", label: "PDF & E-Mail" },
   { id: "smtp", label: "SMTP" },
+  { id: "ai", label: "KI" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -182,6 +183,43 @@ export default function SettingsForm({ settings: initial }: { settings: Settings
                 onChange={(e) => patch("smtp", "from", e.target.value)}
               />
             </label>
+          </div>
+        )}
+
+        {tab === "ai" && (
+          <div className="space-y-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={settings.ai.enabled}
+                onChange={(e) => patch("ai", "enabled", e.target.checked)}
+              />
+              KI-Felderkennung aktivieren
+            </label>
+            <label className="block text-sm">
+              Google-Gemini-API-Schlüssel
+              <input
+                type="password"
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
+                value={settings.ai.apiKey}
+                autoComplete="off"
+                placeholder="AIza…"
+                onChange={(e) => patch("ai", "apiKey", e.target.value)}
+              />
+            </label>
+            <label className="block text-sm">
+              Modell
+              <input
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-3 py-2"
+                value={settings.ai.model}
+                onChange={(e) => patch("ai", "model", e.target.value)}
+              />
+            </label>
+            <p className="text-xs text-ink-dim">
+              Der Editor bekommt damit einen „KI-Scan“-Button, der leere Felder im
+              Dokument erkennt und automatisch als Felder anlegt. Alternativ kann der
+              Schlüssel als Umgebungsvariable <code>GEMINI_API_KEY</code> gesetzt werden.
+            </p>
           </div>
         )}
       </div>

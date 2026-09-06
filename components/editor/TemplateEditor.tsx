@@ -43,6 +43,8 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [sampleText, setSampleText] = useState("Mustertext");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [aiScanning, setAiScanning] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
 
   // Matrix two-click stamping
   const [pendingMatrix, setPendingMatrix] = useState<{
@@ -226,6 +228,33 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     setFeintuning(null);
   };
 
+  // ---- KI-Scan: Gemini erkennt Felder und legt sie automatisch an ----
+  const aiScan = async () => {
+    setAiScanning(true);
+    setAiMessage(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/autodetect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoAdd: true }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "KI-Scan fehlgeschlagen.");
+      setFields((fs) => [...fs, ...data.fields]);
+      setDirty(true);
+      setAiMessage(
+        data.added > 0
+          ? `✨ KI hat ${data.added} Feld${data.added === 1 ? "" : "er"} erkannt und hinzugefügt — bitte prüfen und speichern.`
+          : "KI hat keine Felder erkannt."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "KI-Scan fehlgeschlagen.");
+    } finally {
+      setAiScanning(false);
+    }
+  };
+
   // ---- PDF ersetzen ----
   const replacePdf = async (file: File) => {
     setBusy(true);
@@ -338,6 +367,15 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             />
           )}
 
+          <button
+            title="Erkennt leere Felder im Dokument per Gemini und legt sie automatisch an"
+            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
+            disabled={busy || aiScanning}
+            onClick={() => void aiScan()}
+          >
+            {aiScanning ? "Scannt…" : "KI-Scan ✨"}
+          </button>
+
           <span className="mx-1 h-5 border-l border-line" />
 
           <button
@@ -391,6 +429,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           </div>
         </div>
         {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
+        {aiMessage && <p className="mt-1 text-sm text-green-400">{aiMessage}</p>}
       </div>
 
       {/* Stage */}

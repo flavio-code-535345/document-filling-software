@@ -53,5 +53,10 @@ function mergeSettings(current: Settings, patch: Partial<Settings>): Settings {
       defaultFontSize: Number(patch.pdf?.defaultFontSize ?? current.pdf.defaultFontSize),
       emailEnabled: Boolean(patch.pdf?.emailEnabled ?? current.pdf.emailEnabled),
     },
+    ai: {
+      ...current.ai,
+      ...(patch.ai ?? {}),
+      enabled: Boolean(patch.ai?.enabled ?? current.ai.enabled),
+    },
   };
 }
