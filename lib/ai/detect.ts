@@ -6,7 +6,6 @@
 
 import type { AIProvider, FieldKind, TemplateField } from "../types";
 import { newId } from "../auth.ts";
-import { renderPdfPagesToPng } from "./render";
 
 const VALID_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature"];
 
@@ -26,14 +25,12 @@ export interface AIScanOptions {
   apiKey: string;
   model: string;
   region?: AIScanRegion;
-  ollamaUrl?: string;
 }
 
 const PROVIDER_LABEL: Record<AIProvider, string> = {
   gemini: "Gemini",
   openai: "ChatGPT (OpenAI)",
   anthropic: "Claude (Anthropic)",
-  ollama: "Ollama (lokal)",
 };
 
 const PROMPT = (
@@ -58,20 +55,6 @@ Platziere jedes Rechteck GENAU auf die leere Fläche, in die hineingeschrieben w
 soll (Linie/Lücke/Kasten), nicht auf das gedruckte Label daneben.${regionHint}
 Seitengrößen (pt): ${JSON.stringify(pageSizes)}. Nur Array, kein Markdown.`;
 };
-
-const OLLAMA_PROMPT = `Du bist ein Formular-Feld-Erkenner. Sieh dir das Bild einer PDF-Seite an und antworte NUR mit einem JSON-Array der leeren Eingabefelder. Jedes Element:
-
-{
-  "label": "kurze deutsche Beschriftung",
-  "kind": "text|multiline|date|checkbox|signature",
-  "x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0,
-  "fontSize": 11
-}
-
-WICHTIG: x, y, width, height sind RELATIVE Werte zwischen 0.0 und 1.0,
-bezogen auf die Seitenbreite und -höhe (0,0 = oben links). Platziere jedes
-Rechteck GENAU auf die leere Lücke/Linie/den Kasten, nicht auf das gedruckte
-Label daneben. Wenn keine Felder vorhanden sind, antworte mit []. Nur Array, kein Markdown.`;
 
 function aiError(message: string, code: "AI_NOT_CONFIGURED" | "AI_REQUEST_FAILED"): never {
   const err = new Error(message) as Error & { code: string };
@@ -194,82 +177,26 @@ async function callAnthropic(bytes: Buffer, prompt: string, apiKey: string, mode
     .join("");
 }
 
-/** Tolerant per-page parse: returns [] instead of throwing (a page may be blank). */
-function tryParseArray(text: string): Record<string, unknown>[] {
+/** Extract the JSON array from a model answer (tolerates markdown fences). */
+function parseFieldArray(text: string): Record<string, unknown>[] {
   const fenced = text.replace(/```(?:json)?/g, "");
   const start = fenced.indexOf("[");
   const end = fenced.lastIndexOf("]");
-  if (start < 0 || end <= start) return [];
-  try {
-    const parsed = JSON.parse(fenced.slice(start, end + 1));
-    return Array.isArray(parsed)
-      ? (parsed.filter((x): x is Record<string, unknown> => !!x && typeof x === "object"))
-      : [];
-  } catch {
-    return [];
+  if (start < 0 || end < 0) throw new Error("KI-Antwort konnte nicht gelesen werden.");
+  const parsed = JSON.parse(fenced.slice(start, end + 1));
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error("KI hat keine Felder erkannt.");
   }
-}
-
-async function callOllama(bytes: Buffer, model: string, baseUrl?: string): Promise<string> {
-  const url = (baseUrl || "http://host.docker.internal:11434").replace(/\/+$/, "");
-
-  let images: string[];
-  try {
-    images = await renderPdfPagesToPng(bytes);
-  } catch (err) {
-    aiError(
-      `Ollama: PDF konnte nicht gerendert werden (ist „pdftoppm"/poppler-utils im Image installiert?). ${err instanceof Error ? err.message : ""}`,
-      "AI_REQUEST_FAILED"
-    );
-  }
-
-  const all: Record<string, unknown>[] = [];
-  for (let i = 0; i < images.length; i++) {
-    let res: Response;
-    try {
-      res = await fetch(`${url}/api/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model,
-          prompt: OLLAMA_PROMPT,
-          images: [images[i]],
-          stream: false,
-          options: { temperature: 0 },
-        }),
-      });
-    } catch {
-      aiError(
-        `Ollama-Server nicht erreichbar unter ${url} — läuft der Ollama-Container?`,
-        "AI_REQUEST_FAILED"
-      );
-    }
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      if (res.status === 404) {
-        aiError(`Ollama-Modell „${model}" nicht gefunden — bitte „ollama pull ${model}" ausführen.`, "AI_REQUEST_FAILED");
-      }
-      aiError(`Ollama-Fehler ${res.status}: ${body.slice(0, 160)}`, "AI_REQUEST_FAILED");
-    }
-
-    const data = (await res.json()) as { response?: string };
-    const items = tryParseArray(data.response ?? "");
-    for (const item of items) {
-      all.push({ ...item, page: i });
-    }
-  }
-
-  return JSON.stringify(all);
+  return parsed as Record<string, unknown>[];
 }
 
 /** Run the AI scan with the given provider configuration. */
 export async function detectFieldsWithAI(
   templateBytes: Uint8Array | Buffer,
   pageSizes: { width: number; height: number }[],
-  { provider, apiKey, model, region, ollamaUrl }: AIScanOptions
+  { provider, apiKey, model, region }: AIScanOptions
 ): Promise<TemplateField[]> {
-  if (!apiKey && provider !== "ollama") {
+  if (!apiKey) {
     aiError(
       `${PROVIDER_LABEL[provider]} ist nicht konfiguriert (API-Schlüssel fehlt).`,
       "AI_NOT_CONFIGURED"
@@ -294,12 +221,9 @@ export async function detectFieldsWithAI(
     case "anthropic":
       text = await callAnthropic(bytes, prompt, apiKey, model);
       break;
-    case "ollama":
-      text = await callOllama(bytes, model, ollamaUrl);
-      break;
   }
 
-  return tryParseArray(text)
+  return parseFieldArray(text)
     .map((raw) => sanitizeProposal(raw, pageSizes, region))
     .filter((f): f is TemplateField => f !== null);
 }

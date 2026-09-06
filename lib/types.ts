@@ -68,7 +68,7 @@ export interface AccessRequest {
   createdAt: string;
 }
 
-export type AIProvider = "gemini" | "openai" | "anthropic" | "ollama";
+export type AIProvider = "gemini" | "openai" | "anthropic";
 
 export interface AIProviderConfig {
   apiKey: string;

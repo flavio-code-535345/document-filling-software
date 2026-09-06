@@ -16,7 +16,6 @@ const DEFAULT_SETTINGS: Settings = {
       gemini: { apiKey: "", model: "gemini-2.5-flash" },
       openai: { apiKey: "", model: "gpt-4o-mini" },
       anthropic: { apiKey: "", model: "claude-3-5-haiku-latest" },
-      ollama: { apiKey: "", model: "qwen2.5-vl:7b" },
     },
   },
 };

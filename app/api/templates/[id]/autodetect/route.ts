@@ -42,7 +42,6 @@ export async function POST(
       apiKey: ai.apiKey,
       model: ai.model,
       region,
-      ollamaUrl: ai.ollamaUrl,
     });
 
     if (body.autoAdd && proposals.length > 0) {

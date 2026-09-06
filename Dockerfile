@@ -23,10 +23,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# poppler-utils provides `pdftoppm`, used by the local (Ollama) field scanner
-# to rasterize PDF pages before sending them to the vision model.
-RUN apk add --no-cache poppler-utils
-
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public

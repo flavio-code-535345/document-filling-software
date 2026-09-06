@@ -14,28 +14,10 @@ services:
       - COOKIE_SECURE=false
       # Optional: Gemini-Key für die KI-Felderkennung (alternativ: Einstellungen → KI)
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      # Lokale (Ollama) Felderkennung — zeigt auf den Sidecar unten.
-      - OLLAMA_HOST=http://ollama:11434
     volumes:
       - docflow_data:/app/data
-    depends_on:
-      - ollama
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    environment:
-      # Modell nach 5 Min. Inaktivität entladen, um RAM freizugeben.
-      - OLLAMA_KEEP_ALIVE=5m
-    volumes:
-      - ollama_models:/root/.ollama
 
 
 volumes:
   docflow_data:
-    driver: local
-  ollama_models:
     driver: local
