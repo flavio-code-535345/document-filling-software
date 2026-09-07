@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
@@ -79,9 +79,7 @@ export default function FillForm({
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
   );
-  const [values, setValues] = useState<Record<string, FieldValue>>(() =>
-    loadAutosave(template.id)
-  );
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -101,8 +99,20 @@ export default function FillForm({
   const [seriesWeek, setSeriesWeek] = useState("");
   const [showSeries, setShowSeries] = useState(true);
 
-  // Autosave filled values so nothing is lost on refresh/navigation.
+  // Restore autosaved values after hydration (avoid SSR/hydration mismatch).
+  const skipFirstWrite = useRef(true);
   useEffect(() => {
+    const saved = loadAutosave(template.id);
+    if (Object.keys(saved).length > 0) setValues(saved);
+  }, [template.id]);
+
+  // Persist on every change, skipping the initial empty write (prevents
+  // clobbering saved data before the restore effect has applied).
+  useEffect(() => {
+    if (skipFirstWrite.current) {
+      skipFirstWrite.current = false;
+      return;
+    }
     try {
       window.localStorage.setItem(autosaveKey(template.id), JSON.stringify(values));
     } catch {
