@@ -34,9 +34,26 @@ export interface PageRegion {
   height: number;
 }
 
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+
+function clampZoom(z: number): number {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+}
+
+function roundZoom(z: number): number {
+  return Math.round(z * 100) / 100;
+}
+
+const ZOOM_IN_FACTOR = 1.25;
+const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR;
+const ZOOM_WHEEL_FACTOR = 1.1;
+
 export default function TemplateEditor({ template }: { template: StoredTemplate }) {
   const router = useRouter();
   const templateRef = useRef(template);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const zoomRef = useRef(1);
 
   const [fields, setFields] = useState<TemplateField[]>(template.fields);
   const [pageCount, setPageCount] = useState(template.pageCount);
@@ -64,6 +81,42 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   // 🎯 Feintuning: fieldId + selected cell
   const [feintuning, setFeintuning] = useState<string | null>(null);
   const [feinCell, setFeinCell] = useState<{ row: number; col: number } | null>(null);
+
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+
+  // Ctrl/Cmd + scrollwheel zoom, anchored at the cursor (native listener:
+  // React wheel handlers are passive and cannot preventDefault).
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? ZOOM_WHEEL_FACTOR : 1 / ZOOM_WHEEL_FACTOR;
+      const next = clampZoom(zoomRef.current * factor);
+      if (next === zoomRef.current) return;
+      const ratio = next / zoomRef.current;
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      el.scrollLeft = (el.scrollLeft + cx) * ratio - cx;
+      el.scrollTop = (el.scrollTop + cy) * ratio - cy;
+      setZoom(roundZoom(next));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Fit the current page width into the visible stage.
+  const fitWidth = () => {
+    const el = stageRef.current;
+    if (!el) return;
+    const pageWidth = pageSizes[pageIndex]?.width ?? 612;
+    const available = Math.max(160, el.clientWidth - 48); // stage p-6 padding
+    setZoom(roundZoom(clampZoom(available / pageWidth)));
+  };
 
   const pdfUrl = `/api/templates/${template.id}/pdf?v=${encodeURIComponent(savedAt ?? "0")}`;
 
@@ -408,17 +461,33 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
 
           <button
             className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            title="Zoom"
-            onClick={() => setZoom((z) => Math.round((z - 0.25) * 4) / 4)}
+            title="Verkleinern"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}
           >
             −
           </button>
-          <span className="w-10 text-center text-sm">{Math.round(zoom * 100)}%</span>
+          <button
+            className="w-14 rounded-lg border border-line py-1.5 text-center text-sm tabular-nums hover:border-accent"
+            title="Auf 100% zurücksetzen"
+            onClick={() => setZoom(1)}
+          >
+            {Math.round(zoom * 100)}%
+          </button>
           <button
             className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            onClick={() => setZoom((z) => Math.round((z + 0.25) * 4) / 4)}
+            title="Vergrößern"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_IN_FACTOR)))}
           >
             +
+          </button>
+          <button
+            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
+            title="An Seitenbreite anpassen"
+            onClick={fitWidth}
+          >
+            ⤢ Fit
           </button>
 
           <label className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent">
@@ -463,7 +532,10 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       {/* Stage */}
       <div className="grid gap-4 lg:grid-cols-[1fr_auto]">
         <div className="min-w-0">
-          <div className="flex justify-center overflow-auto rounded-xl border border-line bg-surface-2/50 p-6">
+          <div
+            ref={stageRef}
+            className="flex justify-center overflow-auto rounded-xl border border-line bg-surface-2/50 p-6"
+          >
             {pendingMatrix && (
               <p className="mb-2 rounded-lg border border-accent bg-accent/10 px-3 py-1 text-sm">
                 Zweiten Klick setzen: unterste rechte Zelle (Ursprung + Rastermaß)
