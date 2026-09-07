@@ -17,26 +17,6 @@ const KIND_COLORS: Record<FieldKind, string> = {
   matrix: "#f472b6",
 };
 
-const LINK_COLORS = [
-  "#f59e0b",
-  "#10b981",
-  "#8b5cf6",
-  "#ec4899",
-  "#06b6d4",
-  "#f97316",
-  "#84cc16",
-  "#e11d48",
-];
-
-/** Deterministic color for a link group, stable across pages. */
-function linkColorFor(key: string): string {
-  let h = 0;
-  for (let i = 0; i < key.length; i++) {
-    h = (h * 31 + key.charCodeAt(i)) | 0;
-  }
-  return LINK_COLORS[Math.abs(h) % LINK_COLORS.length];
-}
-
 type DragState =
   | { mode: "move"; id: string; startX: number; startY: number; orig: TemplateField }
   | { mode: "resize"; id: string; startX: number; startY: number; orig: TemplateField }
@@ -51,6 +31,7 @@ export default function PdfPageView({
   selectedId,
   multiSelect,
   rotation = 0,
+  linkColors,
   activeTool,
   feintuning,
   feinCell,
@@ -75,6 +56,7 @@ export default function PdfPageView({
   selectedId: string | null;
   multiSelect: string[];
   rotation?: PageRotation;
+  linkColors?: Map<string, string>;
   activeTool: ToolId | null;
   feintuning: string | null;
   feinCell: { row: number; col: number } | null;
@@ -375,7 +357,7 @@ export default function PdfPageView({
             const displayX = f.x * zoom;
             const displayY = f.y * zoom;
             const isMulti = multiSelect.includes(f.id) && f.id !== selectedId;
-            const linkColor = f.linkKey ? linkColorFor(f.linkKey) : undefined;
+            const linkColor = f.linkKey ? linkColors?.get(f.linkKey) : undefined;
             return (
               <div
                 key={f.id}

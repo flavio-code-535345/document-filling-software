@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { FieldKind, PageRotation, StoredTemplate, TemplateField, TextAlign } from "@/lib/types";
 import {
   alignFields,
+  buildLinkColors,
   createField,
   copyField,
   distributeFields,
@@ -499,6 +500,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const pageSize = pageSizes[pageIndex] ?? { width: 612, height: 792 };
   const thisPageFields = fields.filter((f) => f.page === pageIndex);
   const pageFieldsForPreview = pageCount > 0 ? thisPageFields : [];
+  const linkColors = useMemo(() => buildLinkColors(fields), [fields]);
 
   return (
     <div>
@@ -714,6 +716,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               selectedId={selectedId}
               multiSelect={multiSelect}
               rotation={pageRotations[pageIndex] ?? 0}
+              linkColors={linkColors}
               activeTool={activeTool}
               feintuning={feintuning}
               feinCell={feinCell}

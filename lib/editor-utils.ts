@@ -153,3 +153,22 @@ export function linkFields(fields: TemplateField[], ids: string[]): TemplateFiel
 export function unlinkFields(fields: TemplateField[], ids: string[]): TemplateField[] {
   return fields.map((f) => (ids.includes(f.id) ? { ...f, linkKey: undefined } : f));
 }
+
+/** Golden-angle hue so successive link groups get well-separated, non-repeating colors. */
+function linkColor(index: number): string {
+  const hue = Math.round((index * 137.5) % 360);
+  return `hsl(${hue} 70% 55%)`;
+}
+
+/** Map each distinct linkKey to a unique color (in order of first appearance). */
+export function buildLinkColors(fields: TemplateField[]): Map<string, string> {
+  const map = new Map<string, string>();
+  let i = 0;
+  for (const f of fields) {
+    if (f.linkKey && !map.has(f.linkKey)) {
+      map.set(f.linkKey, linkColor(i));
+      i++;
+    }
+  }
+  return map;
+}
