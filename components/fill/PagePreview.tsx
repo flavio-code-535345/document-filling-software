@@ -77,28 +77,30 @@ export default function PagePreview({
         <div className="grid h-full w-full place-items-center text-sm text-gray-500">
           Vorschau nicht verfügbar
         </div>
-      ) : inner ? (
+      ) : (
         <div
           className="absolute"
           style={{
             left: "50%",
             top: "50%",
-            width: inner.w,
-            height: inner.h,
+            width: inner?.w ?? 0,
+            height: inner?.h ?? 0,
             transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
           }}
         >
           <canvas ref={canvasRef} className="absolute inset-0" />
-          <PreviewSvg
-            pageWidth={pageSize.width}
-            pageHeight={pageSize.height}
-            fields={fields}
-            values={values}
-            className="absolute inset-0 h-full w-full"
-            transparent
-          />
+          {inner && (
+            <PreviewSvg
+              pageWidth={pageSize.width}
+              pageHeight={pageSize.height}
+              fields={fields}
+              values={values}
+              className="absolute inset-0 h-full w-full"
+              transparent
+            />
+          )}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
