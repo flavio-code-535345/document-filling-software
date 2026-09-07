@@ -41,6 +41,28 @@ function loadAutosave(templateId: string): Record<string, FieldValue> {
   }
 }
 
+/** ISO-8601 dates of a calendar week (Monday-first), up to `count` days. */
+function isoWeekDates(year: number, week: number, count: number): string[] {
+  const jan4 = Date.UTC(year, 0, 4);
+  const dow = new Date(jan4).getUTCDay();
+  const week1Monday = jan4 - ((dow + 6) % 7) * 86400000;
+  const monday = week1Monday + (week - 1) * 7 * 86400000;
+  const out: string[] = [];
+  for (let i = 0; i < Math.min(Math.max(0, count), 7); i++) {
+    out.push(new Date(monday + i * 86400000).toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+/** Document reading order for a list of fields: page → y → x. */
+function docOrder(groups: LinkedGroup[]): LinkedGroup[] {
+  return [...groups].sort((a, b) => {
+    const fa = a.fields[0];
+    const fb = b.fields[0];
+    return fa.page - fb.page || fa.y - fb.y || fa.x - fb.x;
+  });
+}
+
 export default function FillForm({
   template,
   emailAvailable,
@@ -53,6 +75,10 @@ export default function FillForm({
   hasDefaultSignature: boolean;
 }) {
   const groups = useMemo(() => groupFields(template.fields ?? []), [template.fields]);
+  const dateGroups = useMemo(
+    () => groups.filter((g) => g.fields[0].kind === "date"),
+    [groups]
+  );
   const [values, setValues] = useState<Record<string, FieldValue>>(() =>
     loadAutosave(template.id)
   );
@@ -65,6 +91,15 @@ export default function FillForm({
   const [draftName, setDraftName] = useState("");
   const [draftError, setDraftError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
+
+  // ---- date series (fills date fields with a range / calendar week) ----
+  const [series, setSeries] = useState<Set<string> | null>(null); // null = all date groups
+  const [seriesMode, setSeriesMode] = useState<"range" | "week">("range");
+  const [seriesStart, setSeriesStart] = useState("");
+  const [seriesEnd, setSeriesEnd] = useState("");
+  const [seriesYear, setSeriesYear] = useState(String(new Date().getFullYear()));
+  const [seriesWeek, setSeriesWeek] = useState("");
+  const [showSeries, setShowSeries] = useState(true);
 
   // Autosave filled values so nothing is lost on refresh/navigation.
   useEffect(() => {
@@ -146,6 +181,57 @@ export default function FillForm({
     });
   };
 
+  // ---- date series helpers ----
+  const seriesKeys = useMemo(
+    () => series ?? new Set(dateGroups.map((g) => g.key)),
+    [series, dateGroups]
+  );
+
+  const toggleSeriesKey = (key: string) => {
+    setSeries((prev) => {
+      const base = prev ?? new Set(dateGroups.map((g) => g.key));
+      const next = new Set(base);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectAllSeries = () => setSeries(new Set(dateGroups.map((g) => g.key)));
+  const clearSeries = () => setSeries(new Set());
+
+  const selectedDateGroups = useMemo(
+    () => docOrder(dateGroups.filter((g) => seriesKeys.has(g.key))),
+    [dateGroups, seriesKeys]
+  );
+
+  const applyRange = () => {
+    if (selectedDateGroups.length < 2 || !seriesStart || !seriesEnd) return;
+    const start = new Date(seriesStart);
+    const end = new Date(seriesEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return;
+    const dates: string[] = [];
+    let cursor = new Date(start);
+    while (cursor <= end && dates.length < selectedDateGroups.length) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor = new Date(cursor.getTime() + 86400000);
+    }
+    selectedDateGroups.forEach((g, i) => {
+      if (dates[i]) setGroupValue(g, dates[i]);
+    });
+  };
+
+  const applyWeek = () => {
+    if (selectedDateGroups.length < 2) return;
+    const year = parseInt(seriesYear, 10);
+    const week = parseInt(seriesWeek, 10);
+    if (!Number.isInteger(year) || !Number.isInteger(week) || week < 1 || week > 53) return;
+    const dates = isoWeekDates(year, week, selectedDateGroups.length);
+    selectedDateGroups.forEach((g, i) => {
+      if (dates[i]) setGroupValue(g, dates[i]);
+    });
+  };
+
   const previewValues: PreviewValues = useMemo(
     () => values as PreviewValues,
     [values]
@@ -216,58 +302,197 @@ export default function FillForm({
         >
           {/* Saved drafts */}
           <section className="rounded-xl border border-line bg-surface p-4">
-            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-dim">
-              Entwürfe
-            </h2>
+            <div className="mb-3 flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                Entwürfe
+              </h2>
+              <span className="text-xs text-ink-dim">automatisch zwischengespeichert</span>
+            </div>
             <div className="flex gap-2">
               <input
                 value={draftName}
                 onChange={(e) => setDraftName(e.target.value)}
-                placeholder="Name für den Entwurf"
-                className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+                placeholder="Entwurf benennen…"
+                className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
               />
               <button
                 type="button"
                 disabled={!draftName.trim() || savingDraft}
-                className="rounded-lg border border-line px-3 py-2 text-sm hover:border-accent disabled:opacity-40"
+                className="rounded-lg bg-accent-strong px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
                 onClick={() => void saveDraft()}
               >
                 {savingDraft ? "Speichert…" : "Speichern"}
               </button>
             </div>
-            {draftError && <p className="mt-1 text-sm text-red-400">{draftError}</p>}
+            {draftError && <p className="mt-2 text-sm text-red-400">{draftError}</p>}
             {savedFills.length > 0 && (
-              <ul className="mt-3 space-y-1">
+              <div className="mt-3 flex flex-wrap gap-2">
                 {savedFills.map((s) => (
-                  <li key={s.id} className="flex items-center gap-2 text-sm">
+                  <div
+                    key={s.id}
+                    className="flex items-center gap-1 rounded-full border border-line bg-canvas py-1 pl-3 pr-1 text-sm"
+                  >
                     <button
                       type="button"
-                      className="min-w-0 flex-1 truncate text-left hover:text-accent"
+                      className="truncate hover:text-accent"
                       onClick={() => loadDraft(s)}
-                      title={`${s.name} — zuletzt ${new Date(s.updatedAt).toLocaleString()}`}
+                      title={`${s.name} — ${new Date(s.updatedAt).toLocaleString()}`}
                     >
-                      {s.name}{" "}
-                      <span className="text-xs text-ink-dim">
-                        {new Date(s.updatedAt).toLocaleDateString()}
-                      </span>
+                      {s.name}
                     </button>
                     <button
                       type="button"
                       title="Entwurf löschen"
-                      className="shrink-0 rounded px-1 text-red-400 hover:bg-surface-2"
+                      className="rounded-full px-1.5 text-red-400 hover:bg-surface-2"
                       onClick={() => void deleteDraft(s.id)}
                     >
                       ✕
                     </button>
-                  </li>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
-            <p className="mt-3 text-xs text-ink-dim">
-              Eingaben werden automatisch zwischengespeichert und beim erneuten Öffnen
-              wiederhergestellt.
-            </p>
           </section>
+
+          {/* Date series: fill date fields with a range or calendar week */}
+          {dateGroups.length >= 2 && (
+            <section className="rounded-xl border border-line bg-surface p-4">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between"
+                onClick={() => setShowSeries((s) => !s)}
+              >
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                  Datumsreihe
+                </h2>
+                <span className="text-ink-dim">{showSeries ? "−" : "+"}</span>
+              </button>
+              {showSeries && (
+                <div className="mt-3 space-y-3">
+                  <div className="inline-flex rounded-lg border border-line p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setSeriesMode("range")}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        seriesMode === "range" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
+                      }`}
+                    >
+                      Zeitraum
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSeriesMode("week")}
+                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                        seriesMode === "week" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
+                      }`}
+                    >
+                      Woche (KW)
+                    </button>
+                  </div>
+
+                  {seriesMode === "range" ? (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="text-xs text-ink-dim">
+                        Von
+                        <input
+                          type="date"
+                          className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                          value={seriesStart}
+                          onChange={(e) => setSeriesStart(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-xs text-ink-dim">
+                        Bis
+                        <input
+                          type="date"
+                          className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                          value={seriesEnd}
+                          onChange={(e) => setSeriesEnd(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!seriesStart || !seriesEnd}
+                        className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+                        onClick={applyRange}
+                      >
+                        Anwenden
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <label className="text-xs text-ink-dim">
+                        Jahr
+                        <input
+                          type="number"
+                          min={2000}
+                          max={2100}
+                          className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                          value={seriesYear}
+                          onChange={(e) => setSeriesYear(e.target.value)}
+                        />
+                      </label>
+                      <label className="text-xs text-ink-dim">
+                        KW
+                        <input
+                          type="number"
+                          min={1}
+                          max={53}
+                          placeholder="z. B. 5"
+                          className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                          value={seriesWeek}
+                          onChange={(e) => setSeriesWeek(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        disabled={!seriesWeek}
+                        className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+                        onClick={applyWeek}
+                      >
+                        Anwenden
+                      </button>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-xs text-ink-dim">
+                        {selectedDateGroups.length} Datumsfelder (von oben nach unten)
+                      </span>
+                      <div className="flex gap-2 text-xs">
+                        <button type="button" className="text-accent hover:underline" onClick={selectAllSeries}>
+                          Alle
+                        </button>
+                        <button type="button" className="text-ink-dim hover:underline" onClick={clearSeries}>
+                          Keine
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {dateGroups.map((g) => {
+                        const checked = seriesKeys.has(g.key);
+                        return (
+                          <button
+                            key={g.key}
+                            type="button"
+                            onClick={() => toggleSeriesKey(g.key)}
+                            className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                              checked
+                                ? "border-accent bg-accent/20 text-accent"
+                                : "border-line text-ink-dim hover:border-accent hover:text-ink"
+                            }`}
+                          >
+                            {g.fields[0].label || "?"}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
 
           {pages.map((pageFields, pageIndex) =>
             pageFields.length === 0 ? null : (
@@ -381,7 +606,7 @@ function FieldControl({
         return (
           <input
             type={f.kind === "date" ? "date" : "text"}
-            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
             value={typeof value === "string" ? value : ""}
             onFocus={onFocus}
             onChange={(e) => onChange(String(e.target.value))}
@@ -391,7 +616,7 @@ function FieldControl({
         return (
           <textarea
             rows={Math.max(3, Math.round(f.height / 18))}
-            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
             value={typeof value === "string" ? value : ""}
             onFocus={onFocus}
             onChange={(e) => onChange(String(e.target.value))}
