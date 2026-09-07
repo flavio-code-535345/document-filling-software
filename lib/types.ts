@@ -118,6 +118,7 @@ export interface Store {
   templates: StoredTemplate[];
   settings: Settings;
   requests: AccessRequest[];
+  savedFills: SavedFill[];
 }
 
 export interface PublicUser {
@@ -132,4 +133,15 @@ export type FieldValue = string | boolean | Record<string, boolean> | undefined;
 
 export interface FillValues {
   [fieldId: string]: FieldValue;
+}
+
+/** A named snapshot of filled-in values for a template, saved by a user. */
+export interface SavedFill {
+  id: string;
+  templateId: string;
+  userId: string;
+  name: string;
+  values: FillValues;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { FieldKind, FieldValue, StoredTemplate, TemplateField } from "@/lib/types";
+import { useEffect, useMemo, useState } from "react";
+import type { FieldKind, FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
@@ -21,6 +21,18 @@ function groupFields(fields: TemplateField[]): LinkedGroup[] {
     groups.get(key)!.push(f);
   }
   return [...groups.values()].map((fields) => ({ key: `${fields[0].kind}|${fields[0].label}`, fields }));
+}
+
+const autosaveKey = (templateId: string) => `docflow:fill:${templateId}`;
+
+function loadAutosave(templateId: string): Record<string, FieldValue> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(autosaveKey(templateId));
+    return raw ? (JSON.parse(raw) as Record<string, FieldValue>) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** ISO-8601 dates of a calendar week (Monday-first), up to `count` days. */
@@ -49,10 +61,80 @@ export default function FillForm({
   hasDefaultSignature: boolean;
 }) {
   const groups = useMemo(() => groupFields(template.fields ?? []), [template.fields]);
-  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>(() =>
+    loadAutosave(template.id)
+  );
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // ---- saved drafts ----
+  const [savedFills, setSavedFills] = useState<SavedFill[]>([]);
+  const [draftName, setDraftName] = useState("");
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
+
+  // Autosave filled values so nothing is lost on refresh/navigation.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(autosaveKey(template.id), JSON.stringify(values));
+    } catch {
+      /* ignore quota/security errors */
+    }
+  }, [values, template.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/fills?templateId=${encodeURIComponent(template.id)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setSavedFills(data.fills ?? []);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [template.id]);
+
+  const saveDraft = async () => {
+    const name = draftName.trim();
+    if (!name || savingDraft) return;
+    setSavingDraft(true);
+    setDraftError(null);
+    try {
+      const res = await fetch("/api/fills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId: template.id, name, values }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Speichern fehlgeschlagen.");
+      setSavedFills((list) => [data.fill, ...list.filter((f) => f.id !== data.fill.id)]);
+      setDraftName("");
+    } catch (err) {
+      setDraftError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const loadDraft = (fill: SavedFill) => {
+    setValues(fill.values ?? {});
+    setError(null);
+  };
+
+  const deleteDraft = async (id: string) => {
+    try {
+      const res = await fetch(`/api/fills/${id}`, { method: "DELETE" });
+      if (res.ok) setSavedFills((list) => list.filter((f) => f.id !== id));
+    } catch {
+      /* ignore */
+    }
+  };
 
   // Series mode: select multiple groups, fill them with one value or a date range.
   const [series, setSeries] = useState<Set<string>>(new Set());
@@ -226,6 +308,61 @@ export default function FillForm({
           }}
           className="space-y-8"
         >
+          {/* Saved drafts */}
+          <section className="rounded-xl border border-line bg-surface p-4">
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-ink-dim">
+              Entwürfe
+            </h2>
+            <div className="flex gap-2">
+              <input
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                placeholder="Name für den Entwurf"
+                className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                disabled={!draftName.trim() || savingDraft}
+                className="rounded-lg border border-line px-3 py-2 text-sm hover:border-accent disabled:opacity-40"
+                onClick={() => void saveDraft()}
+              >
+                {savingDraft ? "Speichert…" : "Speichern"}
+              </button>
+            </div>
+            {draftError && <p className="mt-1 text-sm text-red-400">{draftError}</p>}
+            {savedFills.length > 0 && (
+              <ul className="mt-3 space-y-1">
+                {savedFills.map((s) => (
+                  <li key={s.id} className="flex items-center gap-2 text-sm">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 truncate text-left hover:text-accent"
+                      onClick={() => loadDraft(s)}
+                      title={`${s.name} — zuletzt ${new Date(s.updatedAt).toLocaleString()}`}
+                    >
+                      {s.name}{" "}
+                      <span className="text-xs text-ink-dim">
+                        {new Date(s.updatedAt).toLocaleDateString()}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      title="Entwurf löschen"
+                      className="shrink-0 rounded px-1 text-red-400 hover:bg-surface-2"
+                      onClick={() => void deleteDraft(s.id)}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="mt-3 text-xs text-ink-dim">
+              Eingaben werden automatisch zwischengespeichert und beim erneuten Öffnen
+              wiederhergestellt.
+            </p>
+          </section>
+
           {pages.map((pageFields, pageIndex) =>
             pageFields.length === 0 ? null : (
               <section key={pageIndex} className="rounded-xl border border-line bg-surface p-4">

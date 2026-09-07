@@ -25,6 +25,7 @@ const EMPTY_STORE: Store = {
   templates: [],
   settings: DEFAULT_SETTINGS,
   requests: [],
+  savedFills: [],
 };
 
 export function dataDir(): string {
