@@ -140,3 +140,16 @@ export function distributeFields(
     return { ...f, [axis]: round2(v) };
   });
 }
+
+/** Link the selected fields into one group (share a linkKey). */
+export function linkFields(fields: TemplateField[], ids: string[]): TemplateField[] {
+  if (ids.length < 2) return fields;
+  const selected = fields.filter((f) => ids.includes(f.id));
+  const key = selected.find((f) => f.linkKey)?.linkKey ?? newFieldId();
+  return fields.map((f) => (ids.includes(f.id) ? { ...f, linkKey: key } : f));
+}
+
+/** Remove the selected fields from any link group. */
+export function unlinkFields(fields: TemplateField[], ids: string[]): TemplateField[] {
+  return fields.map((f) => (ids.includes(f.id) ? { ...f, linkKey: undefined } : f));
+}

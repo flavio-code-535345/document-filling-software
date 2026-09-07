@@ -12,12 +12,16 @@ export default function AlignToolbar({
   onAlign,
   onDistribute,
   onTextAlign,
+  onLink,
+  onUnlink,
   onClear,
 }: {
   count: number;
   onAlign: (op: AlignOp) => void;
   onDistribute: (axis: "x" | "y") => void;
   onTextAlign: (align: TextAlign) => void;
+  onLink: () => void;
+  onUnlink: () => void;
   onClear: () => void;
 }) {
   const btn =
@@ -58,6 +62,17 @@ export default function AlignToolbar({
       </button>
       <button className={btn} title="Text rechts ausrichten" onClick={() => onTextAlign("right")}>
         Rechts ⇥
+      </button>
+      <span className="mx-1 h-4 border-l border-line" />
+      <button
+        className={btn}
+        title="Felder verknüpfen — ein Eingabefeld füllt alle"
+        onClick={onLink}
+      >
+        🔗 Verknüpfen
+      </button>
+      <button className={btn} title="Verknüpfung aufheben" onClick={onUnlink}>
+        Trennen
       </button>
       <span className="mx-1 h-4 border-l border-line" />
       <button className={btn} title="Auswahl aufheben" onClick={onClear}>

@@ -44,6 +44,8 @@ export interface TemplateField {
   fontStyle?: FontStyle;
   /** HEX color, e.g. "#000000". */
   textColor?: string;
+  /** Fields sharing a linkKey are filled from a single input in the fill form. */
+  linkKey?: string;
   // Matrix/grid specific
   matrixRows?: string[];
   matrixCols?: string[];

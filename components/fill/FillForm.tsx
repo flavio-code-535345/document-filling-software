@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { FieldKind, FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
+import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
@@ -12,15 +12,21 @@ interface LinkedGroup {
   fields: TemplateField[];
 }
 
-/** Groups fields that share label AND kind into one control (fills all copies). */
+/**
+ * Groups fields into single controls: fields with a shared linkKey collapse
+ * into one input; unlinked fields fall back to identical label+kind (legacy).
+ */
 function groupFields(fields: TemplateField[]): LinkedGroup[] {
   const groups = new Map<string, TemplateField[]>();
   for (const f of fields) {
-    const key = `${f.kind}|${f.label}`;
+    const key = f.linkKey ?? `${f.kind}|${f.label}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(f);
   }
-  return [...groups.values()].map((fields) => ({ key: `${fields[0].kind}|${fields[0].label}`, fields }));
+  return [...groups.values()].map((fields) => ({
+    key: fields[0].linkKey ?? `${fields[0].kind}|${fields[0].label}`,
+    fields,
+  }));
 }
 
 const autosaveKey = (templateId: string) => `docflow:fill:${templateId}`;
@@ -33,20 +39,6 @@ function loadAutosave(templateId: string): Record<string, FieldValue> {
   } catch {
     return {};
   }
-}
-
-/** ISO-8601 dates of a calendar week (Monday-first), up to `count` days. */
-function isoWeekDates(year: number, week: number, count: number): string[] {
-  // Jan 4 is always in ISO week 1.
-  const jan4 = Date.UTC(year, 0, 4);
-  const dow = new Date(jan4).getUTCDay();
-  const week1Monday = jan4 - ((dow + 6) % 7) * 86400000;
-  const monday = week1Monday + (week - 1) * 7 * 86400000;
-  const out: string[] = [];
-  for (let i = 0; i < Math.min(Math.max(0, count), 7); i++) {
-    out.push(new Date(monday + i * 86400000).toISOString().slice(0, 10));
-  }
-  return out;
 }
 
 export default function FillForm({
@@ -134,92 +126,6 @@ export default function FillForm({
     } catch {
       /* ignore */
     }
-  };
-
-  // Series mode: select multiple groups, fill them with one value or a date range.
-  const [series, setSeries] = useState<Set<string>>(new Set());
-  const [seriesValue, setSeriesValue] = useState("");
-  const [seriesStart, setSeriesStart] = useState("");
-  const [seriesEnd, setSeriesEnd] = useState("");
-  const [seriesMode, setSeriesMode] = useState<"range" | "week">("range");
-  const [seriesYear, setSeriesYear] = useState(String(new Date().getFullYear()));
-  const [seriesWeek, setSeriesWeek] = useState("");
-
-  const toggleSeries = (key: string) => {
-    setSeries((s) => {
-      const next = new Set(s);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const selectedSeriesGroups = useMemo(
-    () => groups.filter((g) => series.has(g.key)),
-    [groups, series]
-  );
-
-  const seriesKind = useMemo(() => {
-    if (selectedSeriesGroups.length === 0) return null;
-    const firstKind = selectedSeriesGroups[0].fields[0].kind;
-    return selectedSeriesGroups.every((g) => g.fields[0].kind === firstKind)
-      ? firstKind
-      : "mixed";
-  }, [selectedSeriesGroups]);
-
-  const applySeriesValue = () => {
-    if (selectedSeriesGroups.length < 2 || !seriesValue) return;
-    const value: FieldValue = seriesValue;
-    for (const g of selectedSeriesGroups) setGroupValue(g, value);
-  };
-
-  const applyDateRange = () => {
-    if (selectedSeriesGroups.length < 2 || !seriesStart || !seriesEnd) return;
-    const start = new Date(seriesStart);
-    const end = new Date(seriesEnd);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return;
-
-    // Visual order: page → y → x (top-to-bottom down the document).
-    const ordered = [...selectedSeriesGroups].sort((a, b) => {
-      const fa = a.fields[0];
-      const fb = b.fields[0];
-      return fa.page - fb.page || fa.y - fb.y || fa.x - fb.x;
-    });
-
-    const dates: string[] = [];
-    let cursor = new Date(start);
-    while (cursor <= end && dates.length < ordered.length) {
-      dates.push(cursor.toISOString().slice(0, 10));
-      cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
-    }
-    ordered.forEach((g, i) => {
-      if (dates[i]) setGroupValue(g, dates[i]);
-    });
-  };
-
-  const applyWeek = () => {
-    if (selectedSeriesGroups.length < 2) return;
-    const year = parseInt(seriesYear, 10);
-    const week = parseInt(seriesWeek, 10);
-    if (!Number.isInteger(year) || !Number.isInteger(week) || week < 1 || week > 53) return;
-
-    const ordered = [...selectedSeriesGroups].sort((a, b) => {
-      const fa = a.fields[0];
-      const fb = b.fields[0];
-      return fa.page - fb.page || fa.y - fb.y || fa.x - fb.x;
-    });
-    const dates = isoWeekDates(year, week, ordered.length);
-    ordered.forEach((g, i) => {
-      if (dates[i]) setGroupValue(g, dates[i]);
-    });
-  };
-
-  const clearSeries = () => {
-    setSeries(new Set());
-    setSeriesValue("");
-    setSeriesStart("");
-    setSeriesEnd("");
-    setSeriesWeek("");
   };
 
   const pages = useMemo(() => {
@@ -382,8 +288,6 @@ export default function FillForm({
                           value={values[f.id]}
                           hasDefaultSignature={hasDefaultSignature}
                           linked={linked}
-                          seriesChecked={series.has(group.key)}
-                          onToggleSeries={() => toggleSeries(group.key)}
                           onFocus={() => jumpPreview(pageIndex)}
                           onChange={(v) => setGroupValue(group, v)}
                         />
@@ -448,145 +352,6 @@ export default function FillForm({
           </div>
         </div>
       </div>
-
-      {/* Floating series bar: same value or date range across selected fields */}
-      {selectedSeriesGroups.length >= 2 && (
-        <div className="fixed bottom-4 left-1/2 z-40 w-[min(92vw,720px)] -translate-x-1/2 rounded-xl border border-accent bg-surface p-4 shadow-2xl">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-sm font-semibold">
-              Serie: {selectedSeriesGroups.length} Felder (
-              {seriesKind === "mixed" ? "gemischt" : seriesKind})
-            </p>
-            <button className="text-xs text-ink-dim hover:text-ink" onClick={clearSeries}>
-              Auswahl aufheben
-            </button>
-          </div>
-
-          {seriesKind === "date" ? (
-            <>
-              <div className="mb-3 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSeriesMode("range")}
-                  className={`rounded-full border px-3 py-1 text-xs ${
-                    seriesMode === "range"
-                      ? "border-accent bg-accent/20 text-accent"
-                      : "border-line text-ink-dim hover:border-accent hover:text-ink"
-                  }`}
-                >
-                  Zeitraum
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSeriesMode("week")}
-                  className={`rounded-full border px-3 py-1 text-xs ${
-                    seriesMode === "week"
-                      ? "border-accent bg-accent/20 text-accent"
-                      : "border-line text-ink-dim hover:border-accent hover:text-ink"
-                  }`}
-                >
-                  Woche (KW)
-                </button>
-              </div>
-
-              {seriesMode === "range" ? (
-                <>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="text-xs text-ink-dim">
-                      Von
-                      <input
-                        type="date"
-                        className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
-                        value={seriesStart}
-                        onChange={(e) => setSeriesStart(e.target.value)}
-                      />
-                    </label>
-                    <label className="text-xs text-ink-dim">
-                      Bis
-                      <input
-                        type="date"
-                        className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
-                        value={seriesEnd}
-                        onChange={(e) => setSeriesEnd(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      className="rounded-lg bg-accent-strong px-4 py-1.5 text-sm font-semibold text-white"
-                      disabled={!seriesStart || !seriesEnd}
-                      onClick={applyDateRange}
-                    >
-                      Datumsreihe anwenden (oben → unten)
-                    </button>
-                  </div>
-                  <p className="mt-1.5 text-xs text-ink-dim">
-                    Füllt die Felder in Leserichtung (Seite → von oben nach unten) mit
-                    fortlaufenden Daten.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <div className="flex flex-wrap items-end gap-3">
-                    <label className="text-xs text-ink-dim">
-                      Jahr
-                      <input
-                        type="number"
-                        min={2000}
-                        max={2100}
-                        className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
-                        value={seriesYear}
-                        onChange={(e) => setSeriesYear(e.target.value)}
-                      />
-                    </label>
-                    <label className="text-xs text-ink-dim">
-                      Kalenderwoche (KW)
-                      <input
-                        type="number"
-                        min={1}
-                        max={53}
-                        placeholder="z. B. 5"
-                        className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
-                        value={seriesWeek}
-                        onChange={(e) => setSeriesWeek(e.target.value)}
-                      />
-                    </label>
-                    <button
-                      className="rounded-lg bg-accent-strong px-4 py-1.5 text-sm font-semibold text-white"
-                      disabled={!seriesWeek}
-                      onClick={applyWeek}
-                    >
-                      Wochen-Tage anwenden
-                    </button>
-                  </div>
-                  <p className="mt-1.5 text-xs text-ink-dim">
-                    Füllt die ausgewählten Datumsfelder von oben nach unten mit den Tagen
-                    dieser Woche (Montag → Sonntag). Bei 5 Feldern: Montag → Freitag.
-                  </p>
-                </>
-              )}
-            </>
-          ) : seriesKind !== "mixed" ? (
-            <div className="flex flex-wrap items-center gap-3">
-              <input
-                className="flex-1 min-w-40 rounded-lg border border-line bg-canvas px-3 py-1.5 text-sm"
-                placeholder={seriesKind === "checkbox" ? "true / 1 / x" : "Wert für alle Felder"}
-                value={seriesValue}
-                onChange={(e) => setSeriesValue(e.target.value)}
-              />
-              <button
-                className="rounded-lg bg-accent-strong px-4 py-1.5 text-sm font-semibold text-white"
-                disabled={!seriesValue}
-                onClick={applySeriesValue}
-              >
-                Auf alle anwenden
-              </button>
-            </div>
-          ) : (
-            <p className="text-sm text-ink-dim">
-              Für einen Serienwert müssen alle ausgewählten Felder dieselbe Art haben.
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -596,8 +361,6 @@ function FieldControl({
   value,
   hasDefaultSignature,
   linked,
-  seriesChecked,
-  onToggleSeries,
   onFocus,
   onChange,
 }: {
@@ -605,8 +368,6 @@ function FieldControl({
   value: FieldValue;
   hasDefaultSignature: boolean;
   linked: boolean;
-  seriesChecked: boolean;
-  onToggleSeries: () => void;
   onFocus: () => void;
   onChange: (value: FieldValue) => void;
 }) {
@@ -674,18 +435,6 @@ function FieldControl({
   return (
     <div>
       <div className="mb-1 flex items-center gap-2">
-        <button
-          type="button"
-          title="Dieses Feld zur Serie hinzufügen (gleicher Wert oder Datumsreihe auf mehrere Felder)"
-          onClick={onToggleSeries}
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors ${
-            seriesChecked
-              ? "border-accent bg-accent/20 text-accent"
-              : "border-line text-ink-dim hover:border-accent hover:text-ink"
-          }`}
-        >
-          {seriesChecked ? "✓ Serie" : "＋ Serie"}
-        </button>
         <label className="text-sm font-medium" htmlFor={f.id}>
           {label}
         </label>
@@ -693,7 +442,7 @@ function FieldControl({
         {linked && (
           <span
             className="text-xs text-accent"
-            title="Ein Wert füllt alle Kopien im Dokument"
+            title="Ein Wert füllt alle verknüpften Felder im Dokument"
           >
             🔗 {group.fields.length}×
           </span>

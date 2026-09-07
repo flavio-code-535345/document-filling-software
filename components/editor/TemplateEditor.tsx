@@ -9,7 +9,9 @@ import {
   createField,
   copyField,
   distributeFields,
+  linkFields,
   newFieldId,
+  unlinkFields,
   clampPageIndex,
 } from "@/lib/editor-utils";
 import { matrixCellCenter } from "@/lib/geometry";
@@ -181,6 +183,17 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     },
     [multiSelect]
   );
+
+  // ---- link / unlink fields (one input fills all linked fields) ----
+  const linkSelected = useCallback(() => {
+    setFields((fs) => linkFields(fs, multiSelect));
+    setDirty(true);
+  }, [multiSelect]);
+
+  const unlinkSelected = useCallback(() => {
+    setFields((fs) => unlinkFields(fs, multiSelect));
+    setDirty(true);
+  }, [multiSelect]);
 
   // ---- duplication (single or group) ----
   const duplicateSelection = useCallback(() => {
@@ -814,6 +827,8 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           onAlign={alignSelected}
           onDistribute={distributeSelected}
           onTextAlign={setBulkAlign}
+          onLink={linkSelected}
+          onUnlink={unlinkSelected}
           onClear={clearMulti}
         />
       )}

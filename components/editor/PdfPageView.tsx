@@ -17,6 +17,26 @@ const KIND_COLORS: Record<FieldKind, string> = {
   matrix: "#f472b6",
 };
 
+const LINK_COLORS = [
+  "#f59e0b",
+  "#10b981",
+  "#8b5cf6",
+  "#ec4899",
+  "#06b6d4",
+  "#f97316",
+  "#84cc16",
+  "#e11d48",
+];
+
+/** Deterministic color for a link group, stable across pages. */
+function linkColorFor(key: string): string {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) {
+    h = (h * 31 + key.charCodeAt(i)) | 0;
+  }
+  return LINK_COLORS[Math.abs(h) % LINK_COLORS.length];
+}
+
 type DragState =
   | { mode: "move"; id: string; startX: number; startY: number; orig: TemplateField }
   | { mode: "resize"; id: string; startX: number; startY: number; orig: TemplateField }
@@ -355,6 +375,7 @@ export default function PdfPageView({
             const displayX = f.x * zoom;
             const displayY = f.y * zoom;
             const isMulti = multiSelect.includes(f.id) && f.id !== selectedId;
+            const linkColor = f.linkKey ? linkColorFor(f.linkKey) : undefined;
             return (
               <div
                 key={f.id}
@@ -382,6 +403,7 @@ export default function PdfPageView({
                         ? `2px solid ${f.id === selectedId ? KIND_COLORS[f.kind] : "#3b82f6"}`
                         : "none",
                     outlineOffset: 1,
+                    boxShadow: linkColor ? `0 0 0 3px ${linkColor}` : "none",
                   }}
                 />
                 <span
@@ -398,6 +420,19 @@ export default function PdfPageView({
                     fontWeight: 600,
                   }}
                 >
+                  {linkColor && (
+                    <span
+                      title="Verknüpftes Feld — ein Wert füllt alle"
+                      style={{
+                        display: "inline-block",
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: linkColor,
+                        marginRight: 4,
+                      }}
+                    />
+                  )}
                   {f.label || "?"}
                 </span>
 
