@@ -36,10 +36,12 @@ export async function POST(req: Request) {
       templateId?: string;
       name?: string;
       values?: FillValues;
+      auto?: boolean;
     }>(req);
 
     const templateId = body.templateId?.trim();
-    const name = (body.name ?? "").trim();
+    const isAuto = body.auto === true;
+    const name = (body.name ?? "").trim() || (isAuto ? "Auto-Entwurf" : "");
     if (!templateId) return jsonError("Vorlage fehlt.", 400);
     if (!name) return jsonError("Bitte einen Namen angeben.", 400);
 
@@ -47,13 +49,20 @@ export async function POST(req: Request) {
 
     let saved: SavedFill | undefined;
     await withStore((s) => {
-      const existing = body.id
-        ? s.savedFills.find((f) => f.id === body.id && f.userId === session.user.id)
-        : undefined;
-      if (body.id && !existing) throw Object.assign(new Error("Entwurf nicht gefunden."), { status: 404 });
+      let existing: SavedFill | undefined;
+      if (isAuto) {
+        existing = s.savedFills.find(
+          (f) => f.userId === session.user.id && f.templateId === templateId && f.auto
+        );
+      } else if (body.id) {
+        existing = s.savedFills.find((f) => f.id === body.id && f.userId === session.user.id);
+      }
+      if (body.id && !existing && !isAuto) {
+        throw Object.assign(new Error("Entwurf nicht gefunden."), { status: 404 });
+      }
 
       if (existing) {
-        existing.name = name;
+        existing.name = isAuto ? existing.name : name;
         existing.values = values;
         existing.updatedAt = new Date().toISOString();
         saved = existing;
@@ -65,6 +74,7 @@ export async function POST(req: Request) {
           userId: session.user.id,
           name,
           values,
+          auto: isAuto || undefined,
           createdAt: now,
           updatedAt: now,
         };

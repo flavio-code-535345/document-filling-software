@@ -144,6 +144,8 @@ export interface SavedFill {
   userId: string;
   name: string;
   values: FillValues;
+  /** Auto-draft: continuously updated as the user types (one per user+template). */
+  auto?: boolean;
   createdAt: string;
   updatedAt: string;
 }

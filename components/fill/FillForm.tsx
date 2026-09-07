@@ -29,18 +29,6 @@ function groupFields(fields: TemplateField[]): LinkedGroup[] {
   }));
 }
 
-const autosaveKey = (templateId: string) => `docflow:fill:${templateId}`;
-
-function loadAutosave(templateId: string): Record<string, FieldValue> {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(autosaveKey(templateId));
-    return raw ? (JSON.parse(raw) as Record<string, FieldValue>) : {};
-  } catch {
-    return {};
-  }
-}
-
 /** ISO-8601 dates of a calendar week (Monday-first), up to `count` days. */
 function isoWeekDates(year: number, week: number, count: number): string[] {
   const jan4 = Date.UTC(year, 0, 4);
@@ -99,27 +87,11 @@ export default function FillForm({
   const [seriesWeek, setSeriesWeek] = useState("");
   const [showSeries, setShowSeries] = useState(true);
 
-  // Restore autosaved values after hydration (avoid SSR/hydration mismatch).
-  const skipFirstWrite = useRef(true);
-  useEffect(() => {
-    const saved = loadAutosave(template.id);
-    if (Object.keys(saved).length > 0) setValues(saved);
-  }, [template.id]);
+  // ---- auto-draft: persist to the server as the user types ----
+  const hydratedRef = useRef(false);
+  const autoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Persist on every change, skipping the initial empty write (prevents
-  // clobbering saved data before the restore effect has applied).
-  useEffect(() => {
-    if (skipFirstWrite.current) {
-      skipFirstWrite.current = false;
-      return;
-    }
-    try {
-      window.localStorage.setItem(autosaveKey(template.id), JSON.stringify(values));
-    } catch {
-      /* ignore quota/security errors */
-    }
-  }, [values, template.id]);
-
+  // Load drafts once; restore the auto-draft's values if present.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -127,15 +99,47 @@ export default function FillForm({
         const res = await fetch(`/api/fills?templateId=${encodeURIComponent(template.id)}`);
         if (!res.ok) return;
         const data = await res.json();
-        if (!cancelled) setSavedFills(data.fills ?? []);
+        if (cancelled) return;
+        const fills = (data.fills ?? []) as SavedFill[];
+        setSavedFills(fills);
+        if (!hydratedRef.current) {
+          hydratedRef.current = true;
+          const auto = fills.find((f) => f.auto);
+          if (auto) setValues(auto.values ?? {});
+        }
       } catch {
-        /* ignore */
+        if (!cancelled) hydratedRef.current = true;
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [template.id]);
+
+  // Debounced auto-save (upsert the user's single auto-draft for this template).
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (autoTimer.current) clearTimeout(autoTimer.current);
+    autoTimer.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch("/api/fills", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ templateId: template.id, auto: true, values }),
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          setSavedFills((list) => [data.fill, ...list.filter((f) => !f.auto)]);
+        } catch {
+          /* ignore */
+        }
+      })();
+    }, 800);
+    return () => {
+      if (autoTimer.current) clearTimeout(autoTimer.current);
+    };
+  }, [values, template.id]);
 
   const saveDraft = async () => {
     const name = draftName.trim();
@@ -316,7 +320,7 @@ export default function FillForm({
               <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
                 Entwürfe
               </h2>
-              <span className="text-xs text-ink-dim">automatisch zwischengespeichert</span>
+              <span className="text-xs text-ink-dim">wird automatisch gespeichert</span>
             </div>
             <div className="flex gap-2">
               <input
@@ -342,6 +346,11 @@ export default function FillForm({
                     key={s.id}
                     className="flex items-center gap-1 rounded-full border border-line bg-canvas py-1 pl-3 pr-1 text-sm"
                   >
+                    {s.auto && (
+                      <span className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold uppercase text-accent">
+                        Auto
+                      </span>
+                    )}
                     <button
                       type="button"
                       className="truncate hover:text-accent"
