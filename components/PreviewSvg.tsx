@@ -2,12 +2,16 @@
 
 // Inline-SVG preview of a page with sample values, replicating the server's
 // pdf-lib placement math exactly (baseline positioning ≈ Helvetica).
-import { wrapClient } from "@/lib/pdf/client";
+import { measureHelvetica, wrapClient } from "@/lib/pdf/client";
 import {
   baselineFromTop,
+  fitMultiline,
+  fitSingleLine,
   formatGermanDate,
   matrixCellCenter,
   matrixMarkSize,
+  multilineFirstBaseline,
+  textAlignX,
 } from "@/lib/geometry";
 import type { TemplateField } from "@/lib/types";
 
@@ -71,11 +75,13 @@ function renderField(
       const raw = typeof value === "string" && value.trim() ? value : "";
       if (!raw) return null;
       const text = field.kind === "date" ? formatGermanDate(raw) : raw;
+      const size = fitSingleLine(field, text, measureHelvetica, field.overflow);
+      const width = measureHelvetica(text, size);
       return (
         <text
-          x={field.x}
-          y={field.y + baselineFromTop(field)}
-          fontSize={field.fontSize}
+          x={textAlignX(field, width, field.align)}
+          y={field.y + baselineFromTop(field, size, field.valign)}
+          fontSize={size}
           fontFamily="Helvetica, Arial, sans-serif"
           fill="#000000"
         >
@@ -86,19 +92,25 @@ function renderField(
     case "multiline": {
       const raw = typeof value === "string" && value.trim() ? value : "";
       if (!raw) return null;
-      const lines = wrapClient(raw, field.width, field.fontSize);
-      const lineHeight = field.fontSize * 1.3;
+      const { fontSize, lines } = fitMultiline(
+        field,
+        raw,
+        measureHelvetica,
+        wrapClient,
+        field.overflow
+      );
+      const lineHeight = fontSize * 1.3;
+      const firstBaseline = multilineFirstBaseline(field, fontSize, lines.length, field.valign);
       return (
         <g>
           {lines.map((line, i) => {
-            const baselineTop = baselineFromTop(field) + i * lineHeight;
-            if (baselineTop + field.fontSize * 0.72 > field.height) return null;
+            const width = measureHelvetica(line, fontSize);
             return (
               <text
                 key={i}
-                x={field.x}
-                y={field.y + baselineTop}
-                fontSize={field.fontSize}
+                x={textAlignX(field, width, field.align)}
+                y={field.y + firstBaseline + i * lineHeight}
+                fontSize={fontSize}
                 fontFamily="Helvetica, Arial, sans-serif"
                 fill="#000000"
               >

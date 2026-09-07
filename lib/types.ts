@@ -8,6 +8,10 @@ export type FieldKind =
   | "signature"
   | "matrix";
 
+export type TextAlign = "left" | "center" | "right";
+export type VerticalAlign = "top" | "middle" | "bottom";
+export type OverflowMode = "shrink" | "visible";
+
 export interface TemplateField {
   id: string;
   label: string;
@@ -23,6 +27,12 @@ export interface TemplateField {
   required: boolean;
   /** Include this field's value in the output filename */
   inFileName?: boolean;
+  /** Horizontal text alignment within the field box. */
+  align?: TextAlign;
+  /** Vertical text alignment within the field box. */
+  valign?: VerticalAlign;
+  /** How to handle text that exceeds the field box. "shrink" scales down; "visible" allows overflow. */
+  overflow?: OverflowMode;
   // Matrix/grid specific
   matrixRows?: string[];
   matrixCols?: string[];

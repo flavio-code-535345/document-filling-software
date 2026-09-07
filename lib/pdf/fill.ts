@@ -5,9 +5,13 @@ import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import type { FillValues, StoredTemplate } from "../types";
 import {
   baselineFromTop,
+  fitMultiline,
+  fitSingleLine,
   formatGermanDate,
   matrixCellCenter,
   matrixMarkSize,
+  multilineFirstBaseline,
+  textAlignX,
 } from "../geometry";
 
 function isTruthy(value: string | boolean | undefined): boolean {
@@ -64,10 +68,17 @@ export async function fillPdf(
         const raw = String(value).trim();
         if (!raw) break;
         const text = field.kind === "date" ? formatGermanDate(raw) : raw;
+        const size = fitSingleLine(
+          field,
+          text,
+          (s, sz) => font.widthOfTextAtSize(s, sz),
+          field.overflow
+        );
+        const width = font.widthOfTextAtSize(text, size);
         page.drawText(text, {
-          x: field.x,
-          y: pageHeight - field.y - baselineFromTop(field),
-          size: field.fontSize,
+          x: textAlignX(field, width, field.align),
+          y: pageHeight - field.y - baselineFromTop(field, size, field.valign),
+          size,
           font,
           color: rgb(0, 0, 0),
         });
@@ -76,21 +87,25 @@ export async function fillPdf(
       case "multiline": {
         const raw = String(value).trim();
         if (!raw) break;
-        const lines = wrapText(raw, field.width, (s) => font.widthOfTextAtSize(s, field.fontSize));
-        const lineHeight = field.fontSize * 1.3;
-        let lineIndex = 0;
-        for (const line of lines) {
-          const baselineTop = field.y + baselineFromTop(field) + lineIndex * lineHeight;
-          if (baselineTop - field.y + field.fontSize * 0.72 > field.height) break;
+        const { fontSize, lines } = fitMultiline(
+          field,
+          raw,
+          (s, sz) => font.widthOfTextAtSize(s, sz),
+          (t, w, sz) => wrapText(t, w, (s) => font.widthOfTextAtSize(s, sz)),
+          field.overflow
+        );
+        const lineHeight = fontSize * 1.3;
+        const firstBaseline = multilineFirstBaseline(field, fontSize, lines.length, field.valign);
+        lines.forEach((line, i) => {
+          const width = font.widthOfTextAtSize(line, fontSize);
           page.drawText(line, {
-            x: field.x,
-            y: pageHeight - baselineTop,
-            size: field.fontSize,
+            x: textAlignX(field, width, field.align),
+            y: pageHeight - field.y - firstBaseline - i * lineHeight,
+            size: fontSize,
             font,
             color: rgb(0, 0, 0),
           });
-          lineIndex++;
-        }
+        });
         break;
       }
       case "checkbox": {

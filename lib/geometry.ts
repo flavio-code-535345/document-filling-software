@@ -1,11 +1,104 @@
 // Pure geometry math shared by the server fill engine and the browser
 // previews (editor overlay + fill form SVG) so both render identically.
-import type { TemplateField } from "./types";
+import type { OverflowMode, TemplateField, TextAlign, VerticalAlign } from "./types";
 
 const HELVETICA_RATIO = 0.72;
+const DESCENT_RATIO = 0.2;
+const LINE_HEIGHT_RATIO = 1.3;
+const MIN_FONT_SIZE = 4;
 
-export function baselineFromTop(field: TemplateField): number {
-  return (field.height + field.fontSize * HELVETICA_RATIO) / 2;
+export type MeasureFn = (text: string, fontSize: number) => number;
+
+/** Baseline offset from the field's top edge for a given font size + vertical alignment. */
+export function baselineFromTop(
+  field: TemplateField,
+  fontSize: number = field.fontSize,
+  valign: VerticalAlign = "middle"
+): number {
+  switch (valign) {
+    case "top":
+      return fontSize * HELVETICA_RATIO;
+    case "bottom":
+      return field.height - fontSize * DESCENT_RATIO;
+    default:
+      return (field.height + fontSize * HELVETICA_RATIO) / 2;
+  }
+}
+
+/** Horizontal x position of left-aligned text given its rendered width. */
+export function textAlignX(
+  field: TemplateField,
+  textWidth: number,
+  align: TextAlign = "left"
+): number {
+  switch (align) {
+    case "center":
+      return field.x + (field.width - textWidth) / 2;
+    case "right":
+      return field.x + field.width - textWidth;
+    default:
+      return field.x;
+  }
+}
+
+/** Scale a single line of text down so it fits the field width (unless overflow is allowed). */
+export function fitSingleLine(
+  field: TemplateField,
+  text: string,
+  measure: MeasureFn,
+  overflow: OverflowMode = "shrink"
+): number {
+  if (overflow === "visible" || !text) return field.fontSize;
+  const width = measure(text, field.fontSize);
+  if (width <= field.width) return field.fontSize;
+  const ratio = field.width / width;
+  return Math.max(MIN_FONT_SIZE, Math.floor(field.fontSize * ratio * 100) / 100);
+}
+
+/**
+ * Wrap and (optionally) shrink a multi-line text so the whole block fits the
+ * field box. Returns the final font size and the wrapped lines.
+ */
+export function fitMultiline(
+  field: TemplateField,
+  text: string,
+  measure: MeasureFn,
+  wrap: (text: string, maxWidth: number, fontSize: number) => string[],
+  overflow: OverflowMode = "shrink"
+): { fontSize: number; lines: string[] } {
+  if (overflow === "visible" || !text.trim()) {
+    return { fontSize: field.fontSize, lines: wrap(text, field.width, field.fontSize) };
+  }
+  let fontSize = field.fontSize;
+  let lines = wrap(text, field.width, fontSize);
+  for (let i = 0; i < 40; i++) {
+    const overWidth = lines.some((l) => measure(l, fontSize) > field.width);
+    const blockHeight = lines.length * fontSize * LINE_HEIGHT_RATIO;
+    if (!overWidth && blockHeight <= field.height) break;
+    const next = Math.max(MIN_FONT_SIZE, Math.floor(fontSize * 0.92 * 100) / 100);
+    if (next === fontSize) break;
+    fontSize = next;
+    lines = wrap(text, field.width, fontSize);
+  }
+  return { fontSize, lines };
+}
+
+/** Baseline offset from the field's top edge for the first line of a wrapped block. */
+export function multilineFirstBaseline(
+  field: TemplateField,
+  fontSize: number,
+  lineCount: number,
+  valign: VerticalAlign = "middle"
+): number {
+  const blockHeight = lineCount * fontSize * LINE_HEIGHT_RATIO;
+  switch (valign) {
+    case "top":
+      return fontSize * HELVETICA_RATIO;
+    case "bottom":
+      return field.height - blockHeight + fontSize * HELVETICA_RATIO;
+    default:
+      return (field.height - blockHeight) / 2 + fontSize * HELVETICA_RATIO;
+  }
 }
 
 export function matrixCellCenter(

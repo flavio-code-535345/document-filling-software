@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { FieldKind, TemplateField } from "@/lib/types";
+import type { FieldKind, OverflowMode, TemplateField, TextAlign, VerticalAlign } from "@/lib/types";
 
 const KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature", "matrix"];
 
@@ -198,6 +198,50 @@ export default function Inspector({
           />
           Im Dateinamen verwenden
         </label>
+
+        {(field.kind === "text" || field.kind === "multiline" || field.kind === "date") && (
+          <div className="space-y-3 border-t border-line pt-3">
+            <h4 className="text-sm font-semibold">Text</h4>
+
+            <label className="block text-xs text-ink-dim">
+              Ausrichtung
+              <select
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                value={field.align ?? "left"}
+                onChange={(e) => onPatch({ align: e.target.value as TextAlign })}
+              >
+                <option value="left">Links</option>
+                <option value="center">Zentriert</option>
+                <option value="right">Rechts</option>
+              </select>
+            </label>
+
+            <label className="block text-xs text-ink-dim">
+              Vertikale Ausrichtung
+              <select
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                value={field.valign ?? "middle"}
+                onChange={(e) => onPatch({ valign: e.target.value as VerticalAlign })}
+              >
+                <option value="top">Oben</option>
+                <option value="middle">Mitte</option>
+                <option value="bottom">Unten</option>
+              </select>
+            </label>
+
+            <label className="block text-xs text-ink-dim">
+              Überlauf
+              <select
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                value={field.overflow ?? "shrink"}
+                onChange={(e) => onPatch({ overflow: e.target.value as OverflowMode })}
+              >
+                <option value="shrink">An Feld anpassen (verkleinern)</option>
+                <option value="visible">Überlauf erlauben</option>
+              </select>
+            </label>
+          </div>
+        )}
 
         {field.kind === "matrix" && (
           <div className="space-y-3 border-t border-line pt-3">
