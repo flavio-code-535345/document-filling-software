@@ -77,6 +77,7 @@ export default function FillForm({
   const [draftName, setDraftName] = useState("");
   const [draftError, setDraftError] = useState<string | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
 
   // ---- date series (fills date fields with a range / calendar week) ----
   const [series, setSeries] = useState<Set<string> | null>(null); // null = all date groups
@@ -150,11 +151,17 @@ export default function FillForm({
       const res = await fetch("/api/fills", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId: template.id, name, values }),
+        body: JSON.stringify({
+          id: activeDraftId ?? undefined,
+          templateId: template.id,
+          name,
+          values,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Speichern fehlgeschlagen.");
       setSavedFills((list) => [data.fill, ...list.filter((f) => f.id !== data.fill.id)]);
+      setActiveDraftId(data.fill.id);
       setDraftName("");
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
@@ -163,15 +170,25 @@ export default function FillForm({
     }
   };
 
-  const loadDraft = (fill: SavedFill) => {
+  const selectDraft = (fill: SavedFill) => {
     setValues(fill.values ?? {});
+    setDraftName(fill.name);
+    setActiveDraftId(fill.id);
     setError(null);
+  };
+
+  const deselectDraft = () => {
+    setActiveDraftId(null);
+    setDraftName("");
   };
 
   const deleteDraft = async (id: string) => {
     try {
       const res = await fetch(`/api/fills/${id}`, { method: "DELETE" });
-      if (res.ok) setSavedFills((list) => list.filter((f) => f.id !== id));
+      if (res.ok) {
+        setSavedFills((list) => list.filter((f) => f.id !== id));
+        if (activeDraftId === id) deselectDraft();
+      }
     } catch {
       /* ignore */
     }
@@ -316,11 +333,20 @@ export default function FillForm({
         >
           {/* Saved drafts */}
           <section className="rounded-xl border border-line bg-surface p-4">
-            <div className="mb-3 flex items-baseline gap-2">
+            <div className="mb-3 flex items-center gap-2">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
                 Entwürfe
               </h2>
               <span className="text-xs text-ink-dim">wird automatisch gespeichert</span>
+              {activeDraftId && (
+                <button
+                  type="button"
+                  className="ml-auto text-xs text-ink-dim hover:text-ink"
+                  onClick={deselectDraft}
+                >
+                  Auswahl aufheben
+                </button>
+              )}
             </div>
             <div className="flex gap-2">
               <input
@@ -335,40 +361,45 @@ export default function FillForm({
                 className="rounded-lg bg-accent-strong px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
                 onClick={() => void saveDraft()}
               >
-                {savingDraft ? "Speichert…" : "Speichern"}
+                {savingDraft ? "Speichert…" : activeDraftId ? "Überschreiben" : "Speichern"}
               </button>
             </div>
             {draftError && <p className="mt-2 text-sm text-red-400">{draftError}</p>}
             {savedFills.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
-                {savedFills.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center gap-1 rounded-full border border-line bg-canvas py-1 pl-3 pr-1 text-sm"
-                  >
-                    {s.auto && (
-                      <span className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold uppercase text-accent">
-                        Auto
-                      </span>
-                    )}
-                    <button
-                      type="button"
-                      className="truncate hover:text-accent"
-                      onClick={() => loadDraft(s)}
-                      title={`${s.name} — ${new Date(s.updatedAt).toLocaleString()}`}
+                {savedFills.map((s) => {
+                  const active = s.id === activeDraftId;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`flex items-center gap-1 rounded-full border py-1 pl-3 pr-1 text-sm ${
+                        active ? "border-accent bg-accent/10" : "border-line bg-canvas"
+                      }`}
                     >
-                      {s.name}
-                    </button>
-                    <button
-                      type="button"
-                      title="Entwurf löschen"
-                      className="rounded-full px-1.5 text-red-400 hover:bg-surface-2"
-                      onClick={() => void deleteDraft(s.id)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
+                      {s.auto && (
+                        <span className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold uppercase text-accent">
+                          Auto
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        className={`truncate ${active ? "text-accent" : "hover:text-accent"}`}
+                        onClick={() => selectDraft(s)}
+                        title={`${s.name} — ${new Date(s.updatedAt).toLocaleString()}`}
+                      >
+                        {s.name}
+                      </button>
+                      <button
+                        type="button"
+                        title="Entwurf löschen"
+                        className="rounded-full px-1.5 text-red-400 hover:bg-surface-2"
+                        onClick={() => void deleteDraft(s.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
