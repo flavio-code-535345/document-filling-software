@@ -1,8 +1,8 @@
 // Server-side PDF filling with pdf-lib. Coordinates: PDF points, top-left origin
 // (converted to pdf-lib's bottom-left origin per draw call).
 // Placement math comes from lib/geometry (shared with browser previews).
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
-import type { FillValues, StoredTemplate } from "../types";
+import { PDFDocument, PDFFont, StandardFonts, degrees, rgb, type RGB } from "pdf-lib";
+import type { FillValues, StoredTemplate, TemplateField } from "../types";
 import {
   baselineFromTop,
   fitMultiline,
@@ -16,6 +16,35 @@ import {
 
 function isTruthy(value: string | boolean | undefined): boolean {
   return value === true || value === "true" || value === "1" || value === "on";
+}
+
+/** Resolve the StandardFonts name for a field's fontFamily/weight/style. */
+function standardFontName(field: TemplateField): StandardFonts {
+  const family = field.fontFamily ?? "Helvetica";
+  const bold = field.fontWeight === "bold";
+  const italic = field.fontStyle === "italic";
+  switch (family) {
+    case "Times-Roman":
+      return italic
+        ? bold ? StandardFonts.TimesRomanBoldItalic : StandardFonts.TimesRomanItalic
+        : bold ? StandardFonts.TimesRomanBold : StandardFonts.TimesRoman;
+    case "Courier":
+      return italic
+        ? bold ? StandardFonts.CourierBoldOblique : StandardFonts.CourierOblique
+        : bold ? StandardFonts.CourierBold : StandardFonts.Courier;
+    default:
+      return italic
+        ? bold ? StandardFonts.HelveticaBoldOblique : StandardFonts.HelveticaOblique
+        : bold ? StandardFonts.HelveticaBold : StandardFonts.Helvetica;
+  }
+}
+
+/** Parse a "#RRGGBB" (or "RRGGBB") string into a pdf-lib RGB color. */
+function hexToRgb(hex: string | undefined): RGB {
+  const m = /^#?([0-9a-f]{6})$/i.exec((hex ?? "").trim());
+  if (!m) return rgb(0, 0, 0);
+  const n = parseInt(m[1], 16);
+  return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
 }
 
 export function wrapText(
@@ -51,9 +80,25 @@ export async function fillPdf(
   templatePdfBytes: Uint8Array | Buffer
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(templatePdfBytes, { ignoreEncryption: true });
-  const font = await doc.embedFont(StandardFonts.Helvetica);
   const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
+  const fontCache = new Map<string, PDFFont>();
+  const getFont = async (field: TemplateField): Promise<PDFFont> => {
+    const name = standardFontName(field);
+    let cached = fontCache.get(name);
+    if (!cached) {
+      cached = await doc.embedFont(name);
+      fontCache.set(name, cached);
+    }
+    return cached;
+  };
   const pages = doc.getPages();
+
+  // Apply per-page display rotation (fields stay in media-box coordinates).
+  const rotations = template.pageRotations ?? [];
+  pages.forEach((page, i) => {
+    const rot = rotations[i] ?? 0;
+    if (rot) page.setRotation(degrees(rot));
+  });
 
   for (const field of template.fields) {
     const page = pages[field.page];
@@ -68,6 +113,7 @@ export async function fillPdf(
         const raw = String(value).trim();
         if (!raw) break;
         const text = field.kind === "date" ? formatGermanDate(raw) : raw;
+        const font = await getFont(field);
         const size = fitSingleLine(
           field,
           text,
@@ -80,13 +126,14 @@ export async function fillPdf(
           y: pageHeight - field.y - baselineFromTop(field, size, field.valign),
           size,
           font,
-          color: rgb(0, 0, 0),
+          color: hexToRgb(field.textColor),
         });
         break;
       }
       case "multiline": {
         const raw = String(value).trim();
         if (!raw) break;
+        const font = await getFont(field);
         const { fontSize, lines } = fitMultiline(
           field,
           raw,
@@ -103,7 +150,7 @@ export async function fillPdf(
             y: pageHeight - field.y - firstBaseline - i * lineHeight,
             size: fontSize,
             font,
-            color: rgb(0, 0, 0),
+            color: hexToRgb(field.textColor),
           });
         });
         break;

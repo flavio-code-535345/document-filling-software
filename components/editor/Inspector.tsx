@@ -1,9 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { FieldKind, OverflowMode, TemplateField, TextAlign, VerticalAlign } from "@/lib/types";
+import type {
+  FieldKind,
+  FontFamily,
+  FontStyle,
+  FontWeight,
+  OverflowMode,
+  TemplateField,
+  TextAlign,
+  VerticalAlign,
+} from "@/lib/types";
 
 const KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature", "matrix"];
+
+/** Ensure a value is a valid "#RRGGBB" string for the color input. */
+function normalizeHex(value: string | undefined): string {
+  return /^#[0-9a-f]{6}$/i.test(value ?? "") ? value! : "#000000";
+}
 
 /**
  * Draggable inspector popover for the selected field.
@@ -202,6 +216,61 @@ export default function Inspector({
         {(field.kind === "text" || field.kind === "multiline" || field.kind === "date") && (
           <div className="space-y-3 border-t border-line pt-3">
             <h4 className="text-sm font-semibold">Text</h4>
+
+            <label className="block text-xs text-ink-dim">
+              Schriftart
+              <select
+                className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                value={field.fontFamily ?? "Helvetica"}
+                onChange={(e) => onPatch({ fontFamily: e.target.value as FontFamily })}
+              >
+                <option value="Helvetica">Helvetica</option>
+                <option value="Times-Roman">Times Roman</option>
+                <option value="Courier">Courier</option>
+              </select>
+            </label>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block text-xs text-ink-dim">
+                Stärke
+                <select
+                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                  value={field.fontWeight ?? "normal"}
+                  onChange={(e) => onPatch({ fontWeight: e.target.value as FontWeight })}
+                >
+                  <option value="normal">Normal</option>
+                  <option value="bold">Fett</option>
+                </select>
+              </label>
+              <label className="block text-xs text-ink-dim">
+                Stil
+                <select
+                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                  value={field.fontStyle ?? "normal"}
+                  onChange={(e) => onPatch({ fontStyle: e.target.value as FontStyle })}
+                >
+                  <option value="normal">Normal</option>
+                  <option value="italic">Kursiv</option>
+                </select>
+              </label>
+            </div>
+
+            <label className="block text-xs text-ink-dim">
+              Textfarbe
+              <div className="mt-1 flex items-center gap-2">
+                <input
+                  type="color"
+                  className="h-8 w-10 cursor-pointer rounded border border-line bg-canvas"
+                  value={normalizeHex(field.textColor)}
+                  onChange={(e) => onPatch({ textColor: e.target.value })}
+                />
+                <input
+                  className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm uppercase"
+                  value={normalizeHex(field.textColor)}
+                  onChange={(e) => onPatch({ textColor: e.target.value })}
+                />
+              </div>
+            </label>
 
             <label className="block text-xs text-ink-dim">
               Ausrichtung

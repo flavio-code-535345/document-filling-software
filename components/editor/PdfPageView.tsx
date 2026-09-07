@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { FieldKind, TemplateField } from "@/lib/types";
+import type { FieldKind, PageRotation, TemplateField } from "@/lib/types";
 import { preparePageRender } from "@/lib/pdf/client";
 import { snapAnchors } from "@/lib/geometry";
 import MatrixGrid from "./MatrixGrid";
@@ -19,7 +19,8 @@ const KIND_COLORS: Record<FieldKind, string> = {
 
 type DragState =
   | { mode: "move"; id: string; startX: number; startY: number; orig: TemplateField }
-  | { mode: "resize"; id: string; startX: number; startY: number; orig: TemplateField };
+  | { mode: "resize"; id: string; startX: number; startY: number; orig: TemplateField }
+  | { mode: "marquee"; startX: number; startY: number };
 
 export default function PdfPageView({
   pdfUrl,
@@ -28,12 +29,16 @@ export default function PdfPageView({
   zoom,
   fields,
   selectedId,
+  multiSelect,
+  rotation = 0,
   activeTool,
   feintuning,
   feinCell,
   previewEnabled,
   sampleValues,
-  onSelect,
+  onSelectField,
+  onClearSelection,
+  onMarqueeSelect,
   onPageClick,
   onFieldChange,
   onDeleteField,
@@ -48,12 +53,16 @@ export default function PdfPageView({
   zoom: number;
   fields: TemplateField[];
   selectedId: string | null;
+  multiSelect: string[];
+  rotation?: PageRotation;
   activeTool: ToolId | null;
   feintuning: string | null;
   feinCell: { row: number; col: number } | null;
   previewEnabled: boolean;
   sampleValues: PreviewValues;
-  onSelect: (id: string | null) => void;
+  onSelectField: (id: string, additive: boolean) => void;
+  onClearSelection: () => void;
+  onMarqueeSelect: (ids: string[]) => void;
   onPageClick: (pt: { x: number; y: number }) => void;
   onFieldChange: (id: string, patch: Partial<TemplateField>) => void;
   onDeleteField: (id: string) => void;
@@ -77,9 +86,20 @@ export default function PdfPageView({
     x: null,
     y: null,
   });
+  const [marqueeRect, setMarqueeRect] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
-  const widthPx = pageSize.width * zoom;
-  const heightPx = pageSize.height * zoom;
+  const mediaW = pageSize.width;
+  const mediaH = pageSize.height;
+  const rotated = rotation === 90 || rotation === 270;
+  const widthPx = mediaW * zoom;
+  const heightPx = mediaH * zoom;
+  const displayW = rotated ? heightPx : widthPx;
+  const displayH = rotated ? widthPx : heightPx;
 
   useEffect(() => {
     let cancelled = false;
@@ -107,12 +127,26 @@ export default function PdfPageView({
     };
   }, [pdfUrl, pageIndex, widthPx]);
 
+  // Map a screen point to media-box point coordinates, undoing the CSS rotation.
   const toPt = (e: { clientX: number; clientY: number }) => {
     const rect = containerRef.current!.getBoundingClientRect();
-    return {
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom,
-    };
+    const ox = (e.clientX - rect.left) / zoom;
+    const oy = (e.clientY - rect.top) / zoom;
+    const dx = ox - (rotated ? mediaH / 2 : mediaW / 2);
+    const dy = oy - (rotated ? mediaW / 2 : mediaH / 2);
+    let rx = dx;
+    let ry = dy;
+    if (rotation === 90) {
+      rx = dy;
+      ry = -dx;
+    } else if (rotation === 180) {
+      rx = -dx;
+      ry = -dy;
+    } else if (rotation === 270) {
+      rx = -dy;
+      ry = dx;
+    }
+    return { x: mediaW / 2 + rx, y: mediaH / 2 + ry };
   };
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -137,7 +171,7 @@ export default function PdfPageView({
     if (fieldId && (handle || !activeTool)) {
       const field = fields.find((f) => f.id === fieldId);
       if (!field) return;
-      onSelect(fieldId);
+      onSelectField(fieldId, e.shiftKey || e.metaKey || e.ctrlKey);
       dragRef.current = {
         mode: handle === "se" ? "resize" : "move",
         id: fieldId,
@@ -155,12 +189,17 @@ export default function PdfPageView({
       return;
     }
 
-    onSelect(null);
+    // Empty background: start a marquee selection.
+    onClearSelection();
+    dragRef.current = { mode: "marquee", startX: pt.x, startY: pt.y };
+    setMarqueeRect({ x: pt.x, y: pt.y, width: 0, height: 0 });
+    e.preventDefault();
+    containerRef.current?.setPointerCapture(e.pointerId);
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
     if (activeTool) {
-      setCursor({ x: e.clientX, y: e.clientY });
+      setCursor(toPt(e));
     }
 
     if (activeTool === "ai-region" && regionStartRef.current) {
@@ -177,6 +216,17 @@ export default function PdfPageView({
 
     const drag = dragRef.current;
     if (!drag) return;
+
+    if (drag.mode === "marquee") {
+      const pt = toPt(e);
+      setMarqueeRect({
+        x: Math.min(drag.startX, pt.x),
+        y: Math.min(drag.startY, pt.y),
+        width: Math.abs(pt.x - drag.startX),
+        height: Math.abs(pt.y - drag.startY),
+      });
+      return;
+    }
 
     const pt = toPt(e);
     const dx = pt.x - drag.startX;
@@ -228,6 +278,20 @@ export default function PdfPageView({
       setRegionRect(null);
       return;
     }
+
+    const drag = dragRef.current;
+    if (drag?.mode === "marquee" && marqueeRect) {
+      const rect = marqueeRect;
+      const ids = fields
+        .filter((f) => rectIntersects(f, rect))
+        .map((f) => f.id);
+      onMarqueeSelect(ids);
+      setMarqueeRect(null);
+      dragRef.current = null;
+      setGuides({ x: null, y: null });
+      return;
+    }
+
     dragRef.current = null;
     setGuides({ x: null, y: null });
   };
@@ -237,7 +301,7 @@ export default function PdfPageView({
       <div
         ref={containerRef}
         className="relative inline-block select-none"
-        style={{ width: widthPx, height: heightPx }}
+        style={{ width: displayW, height: displayH }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
@@ -248,192 +312,237 @@ export default function PdfPageView({
         }}
         onMouseLeave={() => setCursor(null)}
       >
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0"
-          style={{ width: widthPx, height: heightPx }}
-        />
+        <div
+          className="absolute"
+          style={{
+            left: "50%",
+            top: "50%",
+            width: widthPx,
+            height: heightPx,
+            transform: `translate(-50%, -50%) rotate(${rotation}deg)`,
+            transformOrigin: "center center",
+          }}
+        >
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0"
+            style={{ width: widthPx, height: heightPx }}
+          />
 
-        {/* Live preview overlay (sample values, transparent over the PDF) */}
-        {previewEnabled && (
-          <div className="pointer-events-none absolute inset-0">
-            <PreviewSvg
-              pageWidth={pageSize.width}
-              pageHeight={pageSize.height}
-              fields={fields}
-              values={sampleValues}
-              className="h-full w-full"
-              transparent
-            />
-          </div>
-        )}
+          {/* Live preview overlay (sample values, transparent over the PDF) */}
+          {previewEnabled && (
+            <div className="pointer-events-none absolute inset-0">
+              <PreviewSvg
+                pageWidth={pageSize.width}
+                pageHeight={pageSize.height}
+                fields={fields}
+                values={sampleValues}
+                className="h-full w-full"
+                transparent
+              />
+            </div>
+          )}
 
-        {/* Field boxes */}
-        {fields.map((f) => {
-          const box =
-            f.kind === "matrix"
-              ? {
-                  width: (f.matrixCols?.length ?? 0) * (f.matrixCellWidth ?? 20),
-                  height: (f.matrixRows?.length ?? 0) * (f.matrixCellHeight ?? 20),
-                }
-              : { width: f.width, height: f.height };
-          const displayX = f.x * zoom;
-          const displayY = f.y * zoom;
-          return (
-          <div
-            key={f.id}
-            data-field-id={f.id}
-            className="absolute"
-            style={{
-              left: displayX,
-              top: displayY,
-              width: box.width * zoom,
-              height: box.height * zoom,
-            }}
-          >
-            <div
-              className="pointer-events-none absolute inset-0"
-              style={{
-                border: `${Math.max(1, f.id === selectedId ? 2 : 1)}px solid ${
-                  f.id === selectedId ? "#ffffff" : KIND_COLORS[f.kind]
-                }`,
-                outline: f.id === selectedId ? `2px solid ${KIND_COLORS[f.kind]}` : "none",
-                outlineOffset: 1,
-              }}
-            />
-            <span
-              className="pointer-events-none absolute"
-              style={{
-                top: -18,
-                left: -1,
-                fontSize: Math.max(10, 12 * Math.min(1.2, zoom)),
-                background: KIND_COLORS[f.kind],
-                color: "#0b1220",
-                padding: "1px 5px",
-                borderRadius: 4,
-                whiteSpace: "nowrap",
-                fontWeight: 600,
-              }}
-            >
-              {f.label || "?"}
-            </span>
-
-            {f.kind === "matrix" && feintuning === f.id ? (
-              <div className="absolute inset-0 overflow-visible">
-                <MatrixGrid
-                  field={f}
-                  selectedCell={feinCell}
-                  showCellCenters
-                  onCellClick={(row, col) => onCellClick?.(f.id, row, col)}
-                />
-              </div>
-            ) : f.kind === "matrix" ? (
-              <div className="pointer-events-none absolute inset-0">
-                <MatrixGrid field={f} />
-              </div>
-            ) : null}
-
-            {f.id === selectedId && (
-              <>
-                <span
-                  data-handle="se"
-                  className="absolute"
+          {/* Field boxes */}
+          {fields.map((f) => {
+            const box =
+              f.kind === "matrix"
+                ? {
+                    width: (f.matrixCols?.length ?? 0) * (f.matrixCellWidth ?? 20),
+                    height: (f.matrixRows?.length ?? 0) * (f.matrixCellHeight ?? 20),
+                  }
+                : { width: f.width, height: f.height };
+            const displayX = f.x * zoom;
+            const displayY = f.y * zoom;
+            const isMulti = multiSelect.includes(f.id) && f.id !== selectedId;
+            return (
+              <div
+                key={f.id}
+                data-field-id={f.id}
+                className="absolute"
+                style={{
+                  left: displayX,
+                  top: displayY,
+                  width: box.width * zoom,
+                  height: box.height * zoom,
+                }}
+              >
+                <div
+                  className="pointer-events-none absolute inset-0"
                   style={{
-                    right: -6,
-                    bottom: -6,
-                    width: 12,
-                    height: 12,
-                    background: "#ffffff",
-                    border: `2px solid ${KIND_COLORS[f.kind]}`,
-                    borderRadius: "50%",
-                    cursor: "nwse-resize",
-                    zIndex: 10,
+                    border: `${Math.max(1, f.id === selectedId ? 2 : 1)}px solid ${
+                      f.id === selectedId
+                        ? "#ffffff"
+                        : isMulti
+                          ? "#3b82f6"
+                          : KIND_COLORS[f.kind]
+                    }`,
+                    outline:
+                      f.id === selectedId || isMulti
+                        ? `2px solid ${f.id === selectedId ? KIND_COLORS[f.kind] : "#3b82f6"}`
+                        : "none",
+                    outlineOffset: 1,
                   }}
                 />
-                <div
-                  className="absolute flex gap-1 pb-6"
-                  style={{ top: -40, right: 0, zIndex: 10 }}
+                <span
+                  className="pointer-events-none absolute"
+                  style={{
+                    top: -18,
+                    left: -1,
+                    fontSize: Math.max(10, 12 * Math.min(1.2, zoom)),
+                    background: KIND_COLORS[f.kind],
+                    color: "#0b1220",
+                    padding: "1px 5px",
+                    borderRadius: 4,
+                    whiteSpace: "nowrap",
+                    fontWeight: 600,
+                  }}
                 >
-                  <button
-                    title="Duplizieren"
-                    className="pointer-events-auto rounded bg-surface px-1.5 text-xs text-ink"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCopyField(f.id);
-                    }}
-                  >
-                    ⧉
-                  </button>
-                  <button
-                    title="Löschen"
-                    className="pointer-events-auto rounded bg-surface px-1.5 text-xs text-red-400"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteField(f.id);
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          );
-        })}
+                  {f.label || "?"}
+                </span>
 
-        {/* Snap guides */}
-        {guides.x !== null && (
-          <div
-            className="pointer-events-none absolute"
-            style={{
-              left: guides.x * zoom,
-              top: 0,
-              bottom: 0,
-              width: 1,
-              background: "#f472b6",
-              zIndex: 20,
-            }}
-          />
-        )}
-        {guides.y !== null && (
-          <div
-            className="pointer-events-none absolute"
-            style={{
-              top: guides.y * zoom,
-              left: 0,
-              right: 0,
-              height: 1,
-              background: "#f472b6",
-              zIndex: 20,
-            }}
-          />
-        )}
+                {f.kind === "matrix" && feintuning === f.id ? (
+                  <div className="absolute inset-0 overflow-visible">
+                    <MatrixGrid
+                      field={f}
+                      selectedCell={feinCell}
+                      showCellCenters
+                      onCellClick={(row, col) => onCellClick?.(f.id, row, col)}
+                    />
+                  </div>
+                ) : f.kind === "matrix" ? (
+                  <div className="pointer-events-none absolute inset-0">
+                    <MatrixGrid field={f} />
+                  </div>
+                ) : null}
 
-        {/* KI-Bereich drag rectangle */}
-        {regionRect && activeTool === "ai-region" && (
-          <div
-            className="pointer-events-none absolute z-30 border-2 border-dashed border-accent bg-accent/10"
-            style={{
-              left: regionRect.x * zoom,
-              top: regionRect.y * zoom,
-              width: regionRect.width * zoom,
-              height: regionRect.height * zoom,
-            }}
-          />
-        )}
+                {f.id === selectedId && (
+                  <>
+                    <span
+                      data-handle="se"
+                      className="absolute"
+                      style={{
+                        right: -6,
+                        bottom: -6,
+                        width: 12,
+                        height: 12,
+                        background: "#ffffff",
+                        border: `2px solid ${KIND_COLORS[f.kind]}`,
+                        borderRadius: "50%",
+                        cursor: "nwse-resize",
+                        zIndex: 10,
+                      }}
+                    />
+                    <div
+                      className="absolute flex gap-1 pb-6"
+                      style={{ top: -40, right: 0, zIndex: 10 }}
+                    >
+                      <button
+                        title="Duplizieren"
+                        className="pointer-events-auto rounded bg-surface px-1.5 text-xs text-ink"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCopyField(f.id);
+                        }}
+                      >
+                        ⧉
+                      </button>
+                      <button
+                        title="Löschen"
+                        className="pointer-events-auto rounded bg-surface px-1.5 text-xs text-red-400"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteField(f.id);
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
 
-        {/* Stamp cursor chip */}
-        {activeTool && activeTool !== "ai-region" && cursor && (
-          <div
-            className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-strong px-2 py-0.5 text-xs font-semibold text-white"
-            style={{ left: cursor.x, top: cursor.y }}
-          >
-            + {activeTool}
-          </div>
-        )}
+          {/* Snap guides */}
+          {guides.x !== null && (
+            <div
+              className="pointer-events-none absolute"
+              style={{
+                left: guides.x * zoom,
+                top: 0,
+                bottom: 0,
+                width: 1,
+                background: "#f472b6",
+                zIndex: 20,
+              }}
+            />
+          )}
+          {guides.y !== null && (
+            <div
+              className="pointer-events-none absolute"
+              style={{
+                top: guides.y * zoom,
+                left: 0,
+                right: 0,
+                height: 1,
+                background: "#f472b6",
+                zIndex: 20,
+              }}
+            />
+          )}
+
+          {/* KI-Bereich drag rectangle */}
+          {regionRect && activeTool === "ai-region" && (
+            <div
+              className="pointer-events-none absolute z-30 border-2 border-dashed border-accent bg-accent/10"
+              style={{
+                left: regionRect.x * zoom,
+                top: regionRect.y * zoom,
+                width: regionRect.width * zoom,
+                height: regionRect.height * zoom,
+              }}
+            />
+          )}
+
+          {/* Marquee selection rectangle */}
+          {marqueeRect && (
+            <div
+              className="pointer-events-none absolute z-30 border border-dashed border-accent bg-accent/10"
+              style={{
+                left: marqueeRect.x * zoom,
+                top: marqueeRect.y * zoom,
+                width: marqueeRect.width * zoom,
+                height: marqueeRect.height * zoom,
+              }}
+            />
+          )}
+
+          {/* Stamp cursor chip */}
+          {activeTool && activeTool !== "ai-region" && cursor && (
+            <div
+              className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-strong px-2 py-0.5 text-xs font-semibold text-white"
+              style={{ left: cursor.x * zoom, top: cursor.y * zoom }}
+            >
+              + {activeTool}
+            </div>
+          )}
+        </div>
       </div>
     </div>
+  );
+}
+
+function rectIntersects(
+  field: TemplateField,
+  rect: { x: number; y: number; width: number; height: number }
+): boolean {
+  return !(
+    field.x + field.width < rect.x ||
+    field.x > rect.x + rect.width ||
+    field.y + field.height < rect.y ||
+    field.y > rect.y + rect.height
   );
 }

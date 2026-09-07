@@ -12,6 +12,11 @@ export type TextAlign = "left" | "center" | "right";
 export type VerticalAlign = "top" | "middle" | "bottom";
 export type OverflowMode = "shrink" | "visible";
 
+export type FontFamily = "Helvetica" | "Times-Roman" | "Courier";
+export type FontWeight = "normal" | "bold";
+export type FontStyle = "normal" | "italic";
+export type PageRotation = 0 | 90 | 180 | 270;
+
 export interface TemplateField {
   id: string;
   label: string;
@@ -33,6 +38,12 @@ export interface TemplateField {
   valign?: VerticalAlign;
   /** How to handle text that exceeds the field box. "shrink" scales down; "visible" allows overflow. */
   overflow?: OverflowMode;
+  /** Typography overrides (default: Helvetica, normal weight/style, black). */
+  fontFamily?: FontFamily;
+  fontWeight?: FontWeight;
+  fontStyle?: FontStyle;
+  /** HEX color, e.g. "#000000". */
+  textColor?: string;
   // Matrix/grid specific
   matrixRows?: string[];
   matrixCols?: string[];
@@ -56,6 +67,8 @@ export interface StoredTemplate {
   fileName: string;
   pageCount: number;
   pageSizes: { width: number; height: number }[];
+  /** Per-page display rotation (indexed by 0-based page). */
+  pageRotations?: PageRotation[];
   fields: TemplateField[];
   createdAt: string;
   updatedAt: string;

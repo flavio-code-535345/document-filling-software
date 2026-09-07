@@ -68,6 +68,7 @@ export async function POST(req: Request) {
       fileName,
       pageCount,
       pageSizes,
+      pageRotations: new Array(pageCount).fill(0),
       fields: [],
       createdAt: now,
       updatedAt: now,

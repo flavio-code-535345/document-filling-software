@@ -88,3 +88,55 @@ export function createField(
 export function clampPageIndex(page: number, pageCount: number): number {
   return Math.min(Math.max(0, page), Math.max(0, pageCount - 1));
 }
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+export type AlignOp = "left" | "right" | "top" | "bottom";
+
+/** Align the selected fields to the chosen edge of their bounding box. */
+export function alignFields(
+  fields: TemplateField[],
+  ids: string[],
+  op: AlignOp
+): TemplateField[] {
+  const selected = fields.filter((f) => ids.includes(f.id));
+  if (selected.length < 2) return fields;
+
+  let target: number;
+  if (op === "left") target = Math.min(...selected.map((f) => f.x));
+  else if (op === "right") target = Math.max(...selected.map((f) => f.x + f.width));
+  else if (op === "top") target = Math.min(...selected.map((f) => f.y));
+  else target = Math.max(...selected.map((f) => f.y + f.height));
+
+  return fields.map((f) => {
+    if (!ids.includes(f.id)) return f;
+    if (op === "left") return { ...f, x: round2(target) };
+    if (op === "right") return { ...f, x: round2(target - f.width) };
+    if (op === "top") return { ...f, y: round2(target) };
+    return { ...f, y: round2(target - f.height) };
+  });
+}
+
+/** Distribute the selected fields evenly along an axis (left/top edges). */
+export function distributeFields(
+  fields: TemplateField[],
+  ids: string[],
+  axis: "x" | "y"
+): TemplateField[] {
+  const selected = fields.filter((f) => ids.includes(f.id));
+  if (selected.length < 3) return fields;
+
+  const sorted = [...selected].sort((a, b) => a[axis] - b[axis]);
+  const first = sorted[0][axis];
+  const last = sorted[sorted.length - 1][axis];
+  const step = (last - first) / (sorted.length - 1);
+  const positions = new Map(sorted.map((f, i) => [f.id, first + i * step]));
+
+  return fields.map((f) => {
+    const v = positions.get(f.id);
+    if (v === undefined) return f;
+    return { ...f, [axis]: round2(v) };
+  });
+}

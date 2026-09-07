@@ -53,6 +53,7 @@ export async function PUT(
       if (Array.isArray(body.fields)) t.fields = body.fields;
       if (typeof body.pageCount === "number") t.pageCount = body.pageCount;
       if (Array.isArray(body.pageSizes)) t.pageSizes = body.pageSizes;
+      if (Array.isArray(body.pageRotations)) t.pageRotations = body.pageRotations;
       t.updatedAt = new Date().toISOString();
     });
     const updated = (await readStore()).templates.find((t) => t.id === id);

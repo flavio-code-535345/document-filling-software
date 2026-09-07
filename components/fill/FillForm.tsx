@@ -304,6 +304,7 @@ export default function FillForm({
                   pageSize={template.pageSizes[i] ?? { width: 612, height: 792 }}
                   fields={(template.fields ?? []).filter((f) => f.page === i)}
                   values={previewValues}
+                  rotation={template.pageRotations?.[i] ?? 0}
                 />
               </div>
             ))}

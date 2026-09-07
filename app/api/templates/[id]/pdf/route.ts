@@ -73,6 +73,7 @@ export async function POST(
       t.fileName = newFileName;
       t.pageCount = pageCount;
       t.pageSizes = pageSizes;
+      t.pageRotations = new Array(pageCount).fill(0);
       t.updatedAt = new Date().toISOString();
     });
     const updated = (await readStore()).templates.find((t) => t.id === id);

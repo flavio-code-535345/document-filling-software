@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { FieldKind, StoredTemplate, TemplateField } from "@/lib/types";
+import type { FieldKind, PageRotation, StoredTemplate, TemplateField } from "@/lib/types";
 import {
+  alignFields,
   createField,
   copyField,
+  distributeFields,
   newFieldId,
   clampPageIndex,
 } from "@/lib/editor-utils";
@@ -14,6 +16,7 @@ import { matrixCellCenter } from "@/lib/geometry";
 import PdfPageView from "./PdfPageView";
 import Inspector from "./Inspector";
 import FieldListPanel from "./FieldListPanel";
+import AlignToolbar from "./AlignToolbar";
 import type { PreviewValues } from "@/components/PreviewSvg";
 
 const TOOLS: { kind: FieldKind; label: string; icon: string }[] = [
@@ -58,6 +61,9 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [fields, setFields] = useState<TemplateField[]>(template.fields);
   const [pageCount, setPageCount] = useState(template.pageCount);
   const [pageSizes, setPageSizes] = useState(template.pageSizes);
+  const [pageRotations, setPageRotations] = useState<PageRotation[]>(
+    template.pageRotations ?? Array.from({ length: template.pageCount }, () => 0)
+  );
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
@@ -152,7 +158,44 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     setSelectedId(id);
   }, []);
 
+  const marqueeSelect = useCallback((ids: string[]) => {
+    setMultiSelect(ids);
+    setSelectedId(ids.length > 0 ? ids[ids.length - 1] : null);
+  }, []);
+
   const clearMulti = useCallback(() => setMultiSelect([]), []);
+
+  // ---- group alignment / distribution ----
+  const alignSelected = useCallback(
+    (op: "left" | "right" | "top" | "bottom") => {
+      setFields((fs) => alignFields(fs, multiSelect, op));
+      setDirty(true);
+    },
+    [multiSelect]
+  );
+
+  const distributeSelected = useCallback(
+    (axis: "x" | "y") => {
+      setFields((fs) => distributeFields(fs, multiSelect, axis));
+      setDirty(true);
+    },
+    [multiSelect]
+  );
+
+  // ---- duplication (single or group) ----
+  const duplicateSelection = useCallback(() => {
+    const ids = multiSelect.length >= 2 ? multiSelect : selectedId ? [selectedId] : [];
+    if (ids.length === 0) return;
+    const copies = ids
+      .map((id) => fields.find((f) => f.id === id))
+      .filter((f): f is TemplateField => Boolean(f))
+      .map((f) => copyField(f, fields));
+    if (copies.length === 0) return;
+    setFields((fs) => [...fs, ...copies]);
+    setMultiSelect(copies.map((c) => c.id));
+    setSelectedId(copies[copies.length - 1].id);
+    setDirty(true);
+  }, [fields, multiSelect, selectedId]);
 
   const applyBulk = useCallback(
     (patch: Partial<TemplateField>) => {
@@ -246,6 +289,11 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         // copy handled via ctrl+c; paste re-adds one more copy is confusing — ignored.
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        duplicateSelection();
+        return;
+      }
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
         if (multiSelect.length >= 2) {
@@ -297,7 +345,17 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, fields, multiSelect, feintuning, feinCell, deleteField, updateField, cancelTool]);
+  }, [selectedId, fields, multiSelect, feintuning, feinCell, deleteField, updateField, cancelTool, duplicateSelection]);
+
+  // ---- page rotation ----
+  const setPageRotation = useCallback((page: number, rot: PageRotation) => {
+    setPageRotations((rs) => {
+      const next = [...rs];
+      next[page] = rot;
+      return next;
+    });
+    setDirty(true);
+  }, []);
 
   // ---- save / discard ----
   const save = async () => {
@@ -307,7 +365,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       const res = await fetch(`/api/templates/${template.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields }),
+        body: JSON.stringify({ fields, pageRotations }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Speichern fehlgeschlagen.");
@@ -316,6 +374,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       templateRef.current = updated;
       setPageCount(updated.pageCount);
       setPageSizes(updated.pageSizes);
+      setPageRotations(updated.pageRotations ?? pageRotations);
       setDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
@@ -328,11 +387,15 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     const res = await fetch(`/api/templates/${template.id}`, { cache: "no-store" });
     const data = await res.json();
     setFields(data.template.fields ?? []);
+    setPageRotations(
+      data.template.pageRotations ?? Array.from({ length: data.template.pageCount }, () => 0)
+    );
     setDirty(false);
     setSelectedId(null);
     setActiveTool(null);
     setPendingMatrix(null);
     setFeintuning(null);
+    setMultiSelect([]);
   };
 
   // ---- KI-Scan: Gemini erkennt Felder und legt sie automatisch an ----
@@ -379,6 +442,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       templateRef.current = updated;
       setPageCount(updated.pageCount);
       setPageSizes(updated.pageSizes);
+      setPageRotations(updated.pageRotations ?? Array.from({ length: updated.pageCount }, () => 0));
       setSavedAt(updated.updatedAt);
       setFields(updated.fields);
       setDirty(false);
@@ -548,6 +612,23 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             </button>
           </ToolGroup>
 
+          <ToolGroup label="Seite drehen">
+            {([0, 90, 180, 270] as PageRotation[]).map((r) => (
+              <button
+                key={r}
+                className={`rounded-md px-2 py-1 text-sm transition-colors ${
+                  (pageRotations[pageIndex] ?? 0) === r
+                    ? "bg-accent/25 text-ink"
+                    : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+                }`}
+                title={`Seite ${pageIndex + 1} um ${r}° drehen`}
+                onClick={() => setPageRotation(pageIndex, r)}
+              >
+                {r}°
+              </button>
+            ))}
+          </ToolGroup>
+
           <div className="ml-auto flex flex-col items-end gap-1">
             <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
               Datei
@@ -611,16 +692,19 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               zoom={zoom}
               fields={pageFieldsForPreview}
               selectedId={selectedId}
+              multiSelect={multiSelect}
+              rotation={pageRotations[pageIndex] ?? 0}
               activeTool={activeTool}
               feintuning={feintuning}
               feinCell={feinCell}
               previewEnabled={previewEnabled}
               sampleValues={sampleValues}
-              onSelect={(id) => {
-                if (id == null) return handleSelect(null);
-                if (showMultiPanel) toggleMulti(id, true);
+              onSelectField={(id, additive) => {
+                if (additive) toggleMulti(id, true);
                 else handleSelect(id);
               }}
+              onClearSelection={() => handleSelect(null)}
+              onMarqueeSelect={marqueeSelect}
               onPageClick={handlePageClick}
               onFieldChange={updateField}
               onDeleteField={deleteField}
@@ -716,6 +800,15 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           setDirty(true);
         }}
       />
+
+      {multiSelect.length >= 2 && (
+        <AlignToolbar
+          count={multiSelect.length}
+          onAlign={alignSelected}
+          onDistribute={distributeSelected}
+          onClear={clearMulti}
+        />
+      )}
 
       {showMultiPanel && (
         <MultiSelectPanel

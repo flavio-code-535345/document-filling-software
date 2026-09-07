@@ -75,8 +75,33 @@ export async function preparePageRender(
 
 /** Approximate Helvetica text width (Arial ≈ Helvetica metrics) for SVG preview parity. */
 export function measureHelvetica(text: string, fontSize: number): number {
+  return measureText(text, fontSize, "Helvetica", "normal", "normal");
+}
+
+/** Map a StandardFonts name to a CSS font-family stack available in the browser. */
+export function cssFontFamily(family?: string): string {
+  switch (family) {
+    case "Times-Roman":
+      return "'Times New Roman', Times, serif";
+    case "Courier":
+      return "'Courier New', Courier, monospace";
+    default:
+      return "Helvetica, Arial, sans-serif";
+  }
+}
+
+/** Measure text width with the browser's native canvas metrics (font-aware). */
+export function measureText(
+  text: string,
+  fontSize: number,
+  family = "Helvetica",
+  weight = "normal",
+  style = "normal"
+): number {
   const ctx = measureCtx();
-  ctx.font = `${fontSize}px Helvetica, Arial, sans-serif`;
+  const italic = style !== "normal" ? "italic " : "";
+  const bold = weight !== "normal" ? "bold " : "";
+  ctx.font = `${italic}${bold}${fontSize}px ${cssFontFamily(family)}`;
   return ctx.measureText(text).width;
 }
 
@@ -91,7 +116,8 @@ function measureCtx(): CanvasRenderingContext2D {
 export function wrapClient(
   text: string,
   maxWidth: number,
-  fontSize: number
+  fontSize: number,
+  measure: (s: string, size: number) => number = measureHelvetica
 ): string[] {
   const lines: string[] = [];
   for (const paragraph of text.split("\n")) {
@@ -103,7 +129,7 @@ export function wrapClient(
     let current = words[0];
     for (let i = 1; i < words.length; i++) {
       const next = `${current} ${words[i]}`;
-      if (measureHelvetica(next, fontSize) <= maxWidth) {
+      if (measure(next, fontSize) <= maxWidth) {
         current = next;
       } else {
         lines.push(current);
