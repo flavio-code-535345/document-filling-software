@@ -66,7 +66,7 @@ export async function fillPdf(
         const text = field.kind === "date" ? formatGermanDate(raw) : raw;
         page.drawText(text, {
           x: field.x,
-          y: pageHeight - baselineFromTop(field),
+          y: pageHeight - field.y - baselineFromTop(field),
           size: field.fontSize,
           font,
           color: rgb(0, 0, 0),
@@ -80,8 +80,8 @@ export async function fillPdf(
         const lineHeight = field.fontSize * 1.3;
         let lineIndex = 0;
         for (const line of lines) {
-          const baselineTop = baselineFromTop(field) + lineIndex * lineHeight;
-          if (baselineTop + field.fontSize * 0.72 > field.height) break;
+          const baselineTop = field.y + baselineFromTop(field) + lineIndex * lineHeight;
+          if (baselineTop - field.y + field.fontSize * 0.72 > field.height) break;
           page.drawText(line, {
             x: field.x,
             y: pageHeight - baselineTop,

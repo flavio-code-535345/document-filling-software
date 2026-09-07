@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FieldKind, StoredTemplate, TemplateField } from "@/lib/types";
@@ -62,9 +62,11 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [zoom, setZoom] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [multiSelect, setMultiSelect] = useState<string[]>([]);
   const [dirty, setDirty] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(template.updatedAt);
   const [showPanel, setShowPanel] = useState(false);
+  const [showMultiPanel, setShowMultiPanel] = useState(false);
   const [previewEnabled, setPreviewEnabled] = useState(false);
   const [sampleText, setSampleText] = useState("Mustertext");
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +138,43 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     setDirty(true);
   }, []);
 
+  // ---- multi-select + bulk edit ----
+  const handleSelect = useCallback((id: string | null) => {
+    setSelectedId(id);
+    setMultiSelect([]);
+  }, []);
+
+  const toggleMulti = useCallback((id: string, additive: boolean) => {
+    setMultiSelect((ms) => {
+      if (!additive) return [id];
+      return ms.includes(id) ? ms.filter((x) => x !== id) : [...ms, id];
+    });
+    setSelectedId(id);
+  }, []);
+
+  const clearMulti = useCallback(() => setMultiSelect([]), []);
+
+  const applyBulk = useCallback(
+    (patch: Partial<TemplateField>) => {
+      if (multiSelect.length < 2) return;
+      setFields((fs) =>
+        fs.map((f) => (multiSelect.includes(f.id) ? { ...f, ...patch } : f))
+      );
+      setDirty(true);
+    },
+    [multiSelect]
+  );
+
+  // Bulk tagging: match a dimension of every multi-selected field to the
+  // anchor field (the last one clicked, i.e. `selected`).
+  const matchDimension = useCallback(
+    (dim: "width" | "height" | "fontSize" | "x" | "y") => {
+      if (!selected) return;
+      applyBulk({ [dim]: selected[dim] } as Partial<TemplateField>);
+    },
+    [selected, applyBulk]
+  );
+
   // ---- stamping ----
   const handlePageClick = useCallback(
     (pt: { x: number; y: number }) => {
@@ -189,6 +228,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
 
       if (e.key === "Escape") {
         cancelTool();
+        setMultiSelect([]);
         return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && selectedId) {
@@ -206,13 +246,18 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         // copy handled via ctrl+c; paste re-adds one more copy is confusing — ignored.
         return;
       }
-      if (!selectedId) return;
-
       if (e.key === "Delete" || e.key === "Backspace") {
         e.preventDefault();
-        deleteField(selectedId);
+        if (multiSelect.length >= 2) {
+          setFields((fs) => fs.filter((f) => !multiSelect.includes(f.id)));
+          setMultiSelect([]);
+          setSelectedId(null);
+        } else if (selectedId) {
+          deleteField(selectedId);
+        }
         return;
       }
+      if (!selectedId) return;
 
       const step = e.shiftKey ? 5 : 1;
       const delta =
@@ -252,7 +297,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, fields, feintuning, feinCell, deleteField, updateField, cancelTool]);
+  }, [selectedId, fields, multiSelect, feintuning, feinCell, deleteField, updateField, cancelTool]);
 
   // ---- save / discard ----
   const save = async () => {
@@ -375,154 +420,172 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     <div>
       {/* Sticky toolbar BELOW the app navbar (top-16) */}
       <div className="sticky top-16 z-30 -mx-4 mb-4 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur">
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href="/admin"
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-          >
-            ← Vorlagen
-          </Link>
-          <span className="font-medium">{template.name}</span>
+        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+          <ToolGroup label="Vorlage">
+            <Link
+              href="/admin"
+              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+            >
+              ← Vorlagen
+            </Link>
+            <span className="max-w-52 truncate px-2 py-1 text-sm font-medium">
+              {template.name}
+            </span>
+          </ToolGroup>
 
-          <span className="mx-1 h-5 border-l border-line" />
+          <ToolGroup label="Werkzeuge">
+            {TOOLS.map((t) => (
+              <button
+                key={t.kind}
+                title={t.label}
+                className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                  activeTool === t.kind
+                    ? "bg-accent/25 text-ink"
+                    : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+                }`}
+                onClick={() => {
+                  setActiveTool(activeTool === t.kind ? null : t.kind);
+                  setPendingMatrix(null);
+                }}
+              >
+                <span className="mr-1">{t.icon}</span>
+                {t.label}
+              </button>
+            ))}
+          </ToolGroup>
 
-          {TOOLS.map((t) => (
+          <ToolGroup label="Ansicht">
             <button
-              key={t.kind}
-              title={t.label}
-              className={`rounded-lg border px-3 py-1.5 text-sm ${
-                activeTool === t.kind
-                  ? "border-accent bg-accent/20"
-                  : "border-line hover:border-accent"
+              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                showPanel ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
               }`}
+              onClick={() => setShowPanel((s) => !s)}
+            >
+              Felder
+            </button>
+            <button
+              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                showMultiPanel ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+              }`}
+              onClick={() => setShowMultiPanel((s) => !s)}
+            >
+              Massen-Tagging
+            </button>
+            <button
+              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                previewEnabled ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+              }`}
+              onClick={() => setPreviewEnabled((p) => !p)}
+            >
+              Vorschau
+            </button>
+            {previewEnabled && (
+              <input
+                value={sampleText}
+                onChange={(e) => setSampleText(e.target.value)}
+                placeholder="Mustertext"
+                className="w-28 rounded-md border border-line bg-canvas px-2 py-1 text-sm"
+              />
+            )}
+          </ToolGroup>
+
+          <ToolGroup label="KI">
+            <button
+              title="Erkennt leere Felder im Dokument per KI und legt sie automatisch an"
+              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+              disabled={busy || aiScanning}
+              onClick={() => void aiScan()}
+            >
+              {aiScanning ? "Scannt…" : "KI-Scan ✨"}
+            </button>
+            <button
+              title="Bereich auf der Seite ziehen — KI scannt nur diesen Ausschnitt"
+              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
+                activeTool === "ai-region"
+                  ? "bg-accent/25 text-ink"
+                  : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+              }`}
+              disabled={busy || aiScanning}
               onClick={() => {
-                setActiveTool(activeTool === t.kind ? null : t.kind);
+                setActiveTool(activeTool === "ai-region" ? null : "ai-region");
                 setPendingMatrix(null);
               }}
             >
-              <span className="mr-1">{t.icon}</span>
-              {t.label}
+              🔍 KI-Bereich
             </button>
-          ))}
+          </ToolGroup>
 
-          <span className="mx-1 h-5 border-l border-line" />
+          <ToolGroup label="Zoom">
+            <button
+              className="rounded-md px-2 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+              title="Verkleinern"
+              disabled={zoom <= MIN_ZOOM}
+              onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}
+            >
+              −
+            </button>
+            <button
+              className="w-14 rounded-md px-1 py-1 text-center text-sm tabular-nums text-ink-dim hover:bg-surface-2 hover:text-ink"
+              title="Auf 100% zurücksetzen"
+              onClick={() => setZoom(1)}
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              className="rounded-md px-2 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+              title="Vergrößern"
+              disabled={zoom >= MAX_ZOOM}
+              onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_IN_FACTOR)))}
+            >
+              +
+            </button>
+            <button
+              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+              title="An Seitenbreite anpassen"
+              onClick={fitWidth}
+            >
+              ⤢ Fit
+            </button>
+          </ToolGroup>
 
-          <button
-            className={`rounded-lg border px-3 py-1.5 text-sm ${
-              showPanel ? "border-accent bg-accent/20" : "border-line hover:border-accent"
-            }`}
-            onClick={() => setShowPanel((s) => !s)}
-          >
-            Felder
-          </button>
-          <button
-            className={`rounded-lg border px-3 py-1.5 text-sm ${
-              previewEnabled ? "border-accent bg-accent/20" : "border-line hover:border-accent"
-            }`}
-            onClick={() => setPreviewEnabled((p) => !p)}
-          >
-            Vorschau
-          </button>
-          {previewEnabled && (
-            <input
-              value={sampleText}
-              onChange={(e) => setSampleText(e.target.value)}
-              placeholder="Mustertext"
-              className="w-32 rounded-lg border border-line bg-surface px-2 py-1.5 text-sm"
-            />
-          )}
-
-          <button
-            title="Erkennt leere Felder im Dokument per Gemini und legt sie automatisch an"
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            disabled={busy || aiScanning}
-            onClick={() => void aiScan()}
-          >
-            {aiScanning ? "Scannt…" : "KI-Scan ✨"}
-          </button>
-
-          <button
-            title="Bereich auf der Seite ziehen — KI scannt nur diesen Ausschnitt"
-            className={`rounded-lg border px-3 py-1.5 text-sm ${
-              activeTool === "ai-region"
-                ? "border-accent bg-accent/20"
-                : "border-line hover:border-accent"
-            }`}
-            disabled={busy || aiScanning}
-            onClick={() => {
-              setActiveTool(activeTool === "ai-region" ? null : "ai-region");
-              setPendingMatrix(null);
-            }}
-          >
-            🔍 KI-Bereich
-          </button>
-
-          <span className="mx-1 h-5 border-l border-line" />
-
-          <button
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            title="Verkleinern"
-            disabled={zoom <= MIN_ZOOM}
-            onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}
-          >
-            −
-          </button>
-          <button
-            className="w-14 rounded-lg border border-line py-1.5 text-center text-sm tabular-nums hover:border-accent"
-            title="Auf 100% zurücksetzen"
-            onClick={() => setZoom(1)}
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            title="Vergrößern"
-            disabled={zoom >= MAX_ZOOM}
-            onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_IN_FACTOR)))}
-          >
-            +
-          </button>
-          <button
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-            title="An Seitenbreite anpassen"
-            onClick={fitWidth}
-          >
-            ⤢ Fit
-          </button>
-
-          <label className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent">
-            PDF ersetzen
-            <input
-              type="file"
-              accept="application/pdf"
-              className="hidden"
-              disabled={dirty || busy}
-              onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) replacePdf(f);
-                e.target.value = "";
-              }}
-            />
-          </label>
-
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs text-ink-dim">
-              {dirty ? "Ungespeichert" : savedAt ? "Gespeichert" : ""}
+          <div className="ml-auto flex flex-col items-end gap-1">
+            <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+              Datei
             </span>
-            <button
-              className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent"
-              disabled={!dirty || busy}
-              onClick={discard}
-            >
-              Verwerfen
-            </button>
-            <button
-              className="rounded-lg bg-accent-strong px-4 py-1.5 text-sm font-semibold text-white"
-              disabled={!dirty || busy}
-              onClick={save}
-            >
-              {busy ? "Speichert…" : "Speichern"}
-            </button>
+            <div className="flex items-center gap-1 rounded-lg border border-line bg-surface/60 p-1">
+              <label className="cursor-pointer rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink">
+                PDF ersetzen
+                <input
+                  type="file"
+                  accept="application/pdf"
+                  className="hidden"
+                  disabled={dirty || busy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) replacePdf(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <span className="mx-1 h-4 border-l border-line" />
+              <span className="px-2 text-xs text-ink-dim">
+                {dirty ? "Ungespeichert" : savedAt ? "Gespeichert" : ""}
+              </span>
+              <button
+                className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+                disabled={!dirty || busy}
+                onClick={discard}
+              >
+                Verwerfen
+              </button>
+              <button
+                className="rounded-md bg-accent-strong px-3 py-1 text-sm font-semibold text-white"
+                disabled={!dirty || busy}
+                onClick={save}
+              >
+                {busy ? "Speichert…" : "Speichern"}
+              </button>
+            </div>
           </div>
         </div>
         {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
@@ -553,7 +616,11 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               feinCell={feinCell}
               previewEnabled={previewEnabled}
               sampleValues={sampleValues}
-              onSelect={(id) => setSelectedId(id)}
+              onSelect={(id) => {
+                if (id == null) return handleSelect(null);
+                if (showMultiPanel) toggleMulti(id, true);
+                else handleSelect(id);
+              }}
               onPageClick={handlePageClick}
               onFieldChange={updateField}
               onDeleteField={deleteField}
@@ -604,9 +671,9 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             pageCount={pageCount}
             currentPage={pageIndex}
             selectedId={selectedId}
-            onSelect={(id) => setSelectedId(id)}
+            onSelect={(id) => handleSelect(id)}
             onSelectAndJump={(id, page) => {
-              setSelectedId(id);
+              handleSelect(id);
               setPageIndex(clampPageIndex(page, pageCount));
             }}
             onDelete={deleteField}
@@ -649,6 +716,122 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           setDirty(true);
         }}
       />
+
+      {showMultiPanel && (
+        <MultiSelectPanel
+          fields={fields}
+          pageIndex={pageIndex}
+          multiSelect={multiSelect}
+          anchorId={selectedId}
+          onToggle={(id) => toggleMulti(id, true)}
+          onClear={clearMulti}
+          onMatch={matchDimension}
+        />
+      )}
+    </div>
+  );
+}
+
+function ToolGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+        {label}
+      </span>
+      <div className="flex items-center gap-1 rounded-lg border border-line bg-surface/60 p-1">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function MultiSelectPanel({
+  fields,
+  pageIndex,
+  multiSelect,
+  anchorId,
+  onToggle,
+  onClear,
+  onMatch,
+}: {
+  fields: TemplateField[];
+  pageIndex: number;
+  multiSelect: string[];
+  anchorId: string | null;
+  onToggle: (id: string) => void;
+  onClear: () => void;
+  onMatch: (dim: "width" | "height" | "fontSize" | "x" | "y") => void;
+}) {
+  const pageFields = fields.filter((f) => f.page === pageIndex);
+  const anchor = fields.find((f) => f.id === anchorId) ?? null;
+  const canMatch = multiSelect.length >= 2 && anchor && multiSelect.includes(anchor.id);
+
+  return (
+    <div className="fixed bottom-4 right-4 z-40 w-72 rounded-xl border border-line bg-surface p-3 shadow-xl">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-semibold">Massen-Tagging</span>
+        <button className="text-xs text-ink-dim hover:text-ink" onClick={onClear}>
+          Auswahl leeren
+        </button>
+      </div>
+      <div className="mb-2 max-h-40 space-y-1 overflow-auto">
+        {pageFields.map((f) => (
+          <label
+            key={f.id}
+            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-surface-2"
+          >
+            <input
+              type="checkbox"
+              checked={multiSelect.includes(f.id)}
+              onChange={() => onToggle(f.id)}
+            />
+            <span className="truncate">{f.label || f.id}</span>
+            {f.id === anchorId && (
+              <span className="ml-auto shrink-0 text-[10px] uppercase text-accent">Anker</span>
+            )}
+          </label>
+        ))}
+      </div>
+      <p className="mb-2 text-xs text-ink-dim">
+        Wählen Sie mind. 2 Felder; das zuletzt in der Liste ausgewählte Feld ist der Anker.
+      </p>
+      <div className="flex flex-wrap gap-1">
+        <button
+          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+          disabled={!canMatch}
+          onClick={() => onMatch("width")}
+        >
+          Breite angleichen
+        </button>
+        <button
+          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+          disabled={!canMatch}
+          onClick={() => onMatch("height")}
+        >
+          Höhe angleichen
+        </button>
+        <button
+          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+          disabled={!canMatch}
+          onClick={() => onMatch("fontSize")}
+        >
+          Schriftgröße angleichen
+        </button>
+        <button
+          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+          disabled={!canMatch}
+          onClick={() => onMatch("x")}
+        >
+          X angleichen
+        </button>
+        <button
+          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+          disabled={!canMatch}
+          onClick={() => onMatch("y")}
+        >
+          Y angleichen
+        </button>
+      </div>
     </div>
   );
 }
