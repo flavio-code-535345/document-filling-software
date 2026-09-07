@@ -1,20 +1,23 @@
 "use client";
 
 import type { AlignOp } from "@/lib/editor-utils";
+import type { TextAlign } from "@/lib/types";
 
 /**
  * Floating alignment toolbar shown when 2+ fields are selected:
- * align edges + distribute evenly along an axis.
+ * align edges, distribute evenly along an axis, and bulk-set text alignment.
  */
 export default function AlignToolbar({
   count,
   onAlign,
   onDistribute,
+  onTextAlign,
   onClear,
 }: {
   count: number;
   onAlign: (op: AlignOp) => void;
   onDistribute: (axis: "x" | "y") => void;
+  onTextAlign: (align: TextAlign) => void;
   onClear: () => void;
 }) {
   const btn =
@@ -42,6 +45,19 @@ export default function AlignToolbar({
       </button>
       <button className={btn} title="Vertikal verteilen" onClick={() => onDistribute("y")}>
         ↕ Verteilen
+      </button>
+      <span className="mx-1 h-4 border-l border-line" />
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+        Text
+      </span>
+      <button className={btn} title="Text links ausrichten" onClick={() => onTextAlign("left")}>
+        ⇤ Links
+      </button>
+      <button className={btn} title="Text zentrieren" onClick={() => onTextAlign("center")}>
+        ↔ Mitte
+      </button>
+      <button className={btn} title="Text rechts ausrichten" onClick={() => onTextAlign("right")}>
+        Rechts ⇥
       </button>
       <span className="mx-1 h-4 border-l border-line" />
       <button className={btn} title="Auswahl aufheben" onClick={onClear}>

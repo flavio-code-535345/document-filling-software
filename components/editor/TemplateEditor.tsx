@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { FieldKind, PageRotation, StoredTemplate, TemplateField } from "@/lib/types";
+import type { FieldKind, PageRotation, StoredTemplate, TemplateField, TextAlign } from "@/lib/types";
 import {
   alignFields,
   createField,
@@ -216,6 +216,13 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       applyBulk({ [dim]: selected[dim] } as Partial<TemplateField>);
     },
     [selected, applyBulk]
+  );
+
+  const setBulkAlign = useCallback(
+    (align: TextAlign) => {
+      applyBulk({ align });
+    },
+    [applyBulk]
   );
 
   // ---- stamping ----
@@ -806,6 +813,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           count={multiSelect.length}
           onAlign={alignSelected}
           onDistribute={distributeSelected}
+          onTextAlign={setBulkAlign}
           onClear={clearMulti}
         />
       )}
