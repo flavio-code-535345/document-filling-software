@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import type { PreviewValues } from "@/components/PreviewSvg";
-import { clusterFieldsIntoRows } from "@/lib/geometry";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
 import SignatureInput from "./SignatureInput";
@@ -13,32 +12,96 @@ interface LinkedGroup {
   fields: TemplateField[];
 }
 
-/** Field kinds short enough to sit side-by-side in a row (e.g. Start/Ende/Pause). */
-const ROW_KINDS = new Set<TemplateField["kind"]>(["text", "date", "checkbox"]);
+/** The five fixed columns of a timesheet day block. */
+type TimesheetColumn = "datum" | "von" | "bis" | "pause" | "stunden";
+
+const COLUMN_ORDER: TimesheetColumn[] = ["datum", "von", "bis", "pause", "stunden"];
+
+const COLUMN_LABELS: Record<TimesheetColumn, string> = {
+  datum: "Datum",
+  von: "Von",
+  bis: "Bis",
+  pause: "Pause",
+  stunden: "Stunden",
+};
+
+const DAY_DEFS: { key: string; label: string; re: RegExp }[] = [
+  { key: "mo", label: "Montag", re: /\b(montag|mo)\b/i },
+  { key: "di", label: "Dienstag", re: /\b(dienstag|di)\b/i },
+  { key: "mi", label: "Mittwoch", re: /\b(mittwoch|mi)\b/i },
+  { key: "do", label: "Donnerstag", re: /\b(donnerstag|do)\b/i },
+  { key: "fr", label: "Freitag", re: /\b(freitag|fr)\b/i },
+  { key: "sa", label: "Samstag", re: /\b(samstag|sa)\b/i },
+  { key: "so", label: "Sonntag", re: /\b(sonntag|so)\b/i },
+];
+
+/** Resolve a field label to a day-of-week key ("mo"…"so"), or null. */
+function detectDay(label: string): string | null {
+  for (const d of DAY_DEFS) if (d.re.test(label)) return d.key;
+  return null;
+}
+
+/** Resolve a field label to one of the five timesheet columns, or null. */
+function detectColumn(label: string): TimesheetColumn | null {
+  const l = label.toLowerCase();
+  if (/\bdatum\b/.test(l)) return "datum";
+  if (/\bvon\b|\bbeginn\b|\bstart\b|\banfang\b/.test(l)) return "von";
+  if (/\bbis\b|\bende\b/.test(l)) return "bis";
+  if (/\bpause\b/.test(l)) return "pause";
+  if (/\bstunden\b|\barbeitszeit\b|\bgesamt\b/.test(l)) return "stunden";
+  return null;
+}
+
+interface DayLayout {
+  key: string;
+  label: string;
+  columns: Partial<Record<TimesheetColumn, LinkedGroup>>;
+}
+
+interface PageLayout {
+  general: LinkedGroup[];
+  days: DayLayout[];
+}
 
 /**
- * Splits a page's groups into visual rows using spatial y-clustering
- * (10px tolerance). Only short field kinds are merged into multi-column
- * rows; multiline/signature/matrix fields always get their own row.
+ * Splits a page's groups into semantic buckets: timesheet fields (which carry
+ * a day suffix + a known column keyword) are grouped by day of week, while
+ * everything else ("Name", "Vorname", …) stays in the general list.
  */
-function buildPageRows(pageGroups: LinkedGroup[]): LinkedGroup[][] {
-  const spatial = pageGroups.map((g) => ({ x: g.fields[0].x, y: g.fields[0].y, group: g }));
-  const clustered = clusterFieldsIntoRows(spatial, 10);
-  const rows: LinkedGroup[][] = [];
-  for (const cluster of clustered) {
-    let run: LinkedGroup[] = [];
-    for (const item of cluster) {
-      if (ROW_KINDS.has(item.group.fields[0].kind)) {
-        run.push(item.group);
-      } else {
-        if (run.length) rows.push(run);
-        run = [];
-        rows.push([item.group]);
+function buildPageLayout(pageGroups: LinkedGroup[]): PageLayout {
+  const general: LinkedGroup[] = [];
+  const daysByKey = new Map<string, DayLayout>();
+
+  for (const g of pageGroups) {
+    const label = g.fields[0].label;
+    const dayKey = detectDay(label);
+    const column = dayKey ? detectColumn(label) : null;
+    if (dayKey && column) {
+      let day = daysByKey.get(dayKey);
+      if (!day) {
+        const def = DAY_DEFS.find((d) => d.key === dayKey)!;
+        day = { key: dayKey, label: def.label, columns: {} };
+        daysByKey.set(dayKey, day);
       }
+      day.columns[column] = g;
+    } else {
+      general.push(g);
     }
-    if (run.length) rows.push(run);
   }
-  return rows;
+
+  general.sort((a, b) => {
+    const fa = a.fields[0];
+    const fb = b.fields[0];
+    return fa.y - fb.y || fa.x - fb.x;
+  });
+
+  const days = [...daysByKey.values()].sort((a, b) => {
+    const ai = DAY_DEFS.findIndex((d) => d.key === a.key);
+    const bi = DAY_DEFS.findIndex((d) => d.key === b.key);
+    return ai - bi;
+  });
+
+  return { general, days };
 }
 
 /**
@@ -233,8 +296,8 @@ export default function FillForm({
     return out;
   }, [groups, template.pageCount]);
 
-  const pageRows = useMemo(
-    () => pageGroups.map((g) => buildPageRows(g)),
+  const pageLayouts = useMemo(
+    () => pageGroups.map((g) => buildPageLayout(g)),
     [pageGroups]
   );
 
@@ -578,44 +641,57 @@ export default function FillForm({
             </section>
           )}
 
-          {pageRows.map((rows, pageIndex) =>
-            rows.length === 0 ? null : (
+          {pageLayouts.map((layout, pageIndex) => {
+            if (layout.general.length === 0 && layout.days.length === 0) return null;
+            return (
               <section key={pageIndex} className="rounded-xl border border-line bg-surface p-4">
                 <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-ink-dim">
                   Seite {pageIndex + 1}
                 </h2>
-                <div className="flex flex-col space-y-4">
-                  {rows.map((row, rowIndex) =>
-                    row.length > 1 ? (
-                      <div key={rowIndex} className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                        {row.map((group) => (
+
+                {layout.general.length > 0 && (
+                  <div className="flex flex-col space-y-4">
+                    {layout.general.map((group) => (
+                      <FieldControl
+                        key={group.fields[0].id}
+                        group={group}
+                        value={values[group.fields[0].id]}
+                        hasDefaultSignature={hasDefaultSignature}
+                        linked={group.fields.length > 1}
+                        onFocus={() => jumpPreview(pageIndex)}
+                        onChange={(v) => setGroupValue(group, v)}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {layout.days.map((day) => (
+                  <div key={day.key} className="mt-6">
+                    <h4 className="mb-2 text-sm font-semibold">{day.label}</h4>
+                    <div className="grid grid-cols-5 gap-4">
+                      {COLUMN_ORDER.map((col) => {
+                        const group = day.columns[col];
+                        return group ? (
                           <FieldControl
-                            key={group.fields[0].id}
+                            key={col}
                             group={group}
                             value={values[group.fields[0].id]}
                             hasDefaultSignature={hasDefaultSignature}
                             linked={group.fields.length > 1}
+                            labelOverride={COLUMN_LABELS[col]}
                             onFocus={() => jumpPreview(pageIndex)}
                             onChange={(v) => setGroupValue(group, v)}
                           />
-                        ))}
-                      </div>
-                    ) : (
-                      <FieldControl
-                        key={row[0].fields[0].id}
-                        group={row[0]}
-                        value={values[row[0].fields[0].id]}
-                        hasDefaultSignature={hasDefaultSignature}
-                        linked={row[0].fields.length > 1}
-                        onFocus={() => jumpPreview(pageIndex)}
-                        onChange={(v) => setGroupValue(row[0], v)}
-                      />
-                    )
-                  )}
-                </div>
+                        ) : (
+                          <div key={col} />
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </section>
-            )
-          )}
+            );
+          })}
 
           {emailAvailable && (
             <label className="flex items-start gap-2 rounded-xl border border-line bg-surface p-4 text-sm">
@@ -679,6 +755,7 @@ function FieldControl({
   value,
   hasDefaultSignature,
   linked,
+  labelOverride,
   onFocus,
   onChange,
 }: {
@@ -686,11 +763,12 @@ function FieldControl({
   value: FieldValue;
   hasDefaultSignature: boolean;
   linked: boolean;
+  labelOverride?: string;
   onFocus: () => void;
   onChange: (value: FieldValue) => void;
 }) {
   const f = group.fields[0];
-  const label = f.label || "Feld";
+  const label = labelOverride ?? f.label ?? "Feld";
 
   const control = (() => {
     switch (f.kind) {
