@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import type { PreviewValues } from "@/components/PreviewSvg";
+import { clusterFieldsIntoRows } from "@/lib/geometry";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
 import SignatureInput from "./SignatureInput";
@@ -10,6 +11,34 @@ import SignatureInput from "./SignatureInput";
 interface LinkedGroup {
   key: string;
   fields: TemplateField[];
+}
+
+/** Field kinds short enough to sit side-by-side in a row (e.g. Start/Ende/Pause). */
+const ROW_KINDS = new Set<TemplateField["kind"]>(["text", "date", "checkbox"]);
+
+/**
+ * Splits a page's groups into visual rows using spatial y-clustering
+ * (10px tolerance). Only short field kinds are merged into multi-column
+ * rows; multiline/signature/matrix fields always get their own row.
+ */
+function buildPageRows(pageGroups: LinkedGroup[]): LinkedGroup[][] {
+  const spatial = pageGroups.map((g) => ({ x: g.fields[0].x, y: g.fields[0].y, group: g }));
+  const clustered = clusterFieldsIntoRows(spatial, 10);
+  const rows: LinkedGroup[][] = [];
+  for (const cluster of clustered) {
+    let run: LinkedGroup[] = [];
+    for (const item of cluster) {
+      if (ROW_KINDS.has(item.group.fields[0].kind)) {
+        run.push(item.group);
+      } else {
+        if (run.length) rows.push(run);
+        run = [];
+        rows.push([item.group]);
+      }
+    }
+    if (run.length) rows.push(run);
+  }
+  return rows;
 }
 
 /**
@@ -194,15 +223,20 @@ export default function FillForm({
     }
   };
 
-  const pages = useMemo(() => {
-    const out: TemplateField[][] = Array.from({ length: template.pageCount }, () => []);
+  const pageGroups = useMemo(() => {
+    const out: LinkedGroup[][] = Array.from({ length: template.pageCount }, () => []);
     for (const g of groups) {
       const page = g.fields[0].page;
-      if (page >= 0 && page < template.pageCount) out[page].push(...g.fields.slice(0, 1));
-      else out[0]?.push(g.fields[0]);
+      if (page >= 0 && page < template.pageCount) out[page].push(g);
+      else out[0]?.push(g);
     }
     return out;
   }, [groups, template.pageCount]);
+
+  const pageRows = useMemo(
+    () => pageGroups.map((g) => buildPageRows(g)),
+    [pageGroups]
+  );
 
   const setGroupValue = (group: LinkedGroup, next: FieldValue) => {
     setValues((v) => {
@@ -544,31 +578,40 @@ export default function FillForm({
             </section>
           )}
 
-          {pages.map((pageFields, pageIndex) =>
-            pageFields.length === 0 ? null : (
+          {pageRows.map((rows, pageIndex) =>
+            rows.length === 0 ? null : (
               <section key={pageIndex} className="rounded-xl border border-line bg-surface p-4">
                 <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-ink-dim">
                   Seite {pageIndex + 1}
                 </h2>
-                <div className="space-y-5">
-                  {pageFields.map((f) => {
-                    const group = groups.find(
-                      (g) => g.fields[0].id === f.id
-                    )!;
-                    const linked = group.fields.length > 1;
-                    return (
-                      <div key={f.id}>
-                        <FieldControl
-                          group={group}
-                          value={values[f.id]}
-                          hasDefaultSignature={hasDefaultSignature}
-                          linked={linked}
-                          onFocus={() => jumpPreview(pageIndex)}
-                          onChange={(v) => setGroupValue(group, v)}
-                        />
+                <div className="flex flex-col space-y-4">
+                  {rows.map((row, rowIndex) =>
+                    row.length > 1 ? (
+                      <div key={rowIndex} className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                        {row.map((group) => (
+                          <FieldControl
+                            key={group.fields[0].id}
+                            group={group}
+                            value={values[group.fields[0].id]}
+                            hasDefaultSignature={hasDefaultSignature}
+                            linked={group.fields.length > 1}
+                            onFocus={() => jumpPreview(pageIndex)}
+                            onChange={(v) => setGroupValue(group, v)}
+                          />
+                        ))}
                       </div>
-                    );
-                  })}
+                    ) : (
+                      <FieldControl
+                        key={row[0].fields[0].id}
+                        group={row[0]}
+                        value={values[row[0].fields[0].id]}
+                        hasDefaultSignature={hasDefaultSignature}
+                        linked={row[0].fields.length > 1}
+                        onFocus={() => jumpPreview(pageIndex)}
+                        onChange={(v) => setGroupValue(row[0], v)}
+                      />
+                    )
+                  )}
                 </div>
               </section>
             )

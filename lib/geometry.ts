@@ -142,6 +142,50 @@ export function formatGermanDate(value: string): string {
   return `${m[3]}.${m[2]}.${m[1]}`;
 }
 
+export interface SpatialField {
+  x: number;
+  y: number;
+}
+
+/**
+ * Reading-order sort for filled-form layouts: top-to-bottom by `y`; fields
+ * within `yTolerance` px of each other (manual placement wiggle) are ordered
+ * left-to-right by `x` instead.
+ */
+export function sortFieldsSpatially<T extends SpatialField>(
+  fields: T[],
+  yTolerance = 10
+): T[] {
+  return [...fields].sort((a, b) => {
+    const dy = a.y - b.y;
+    if (Math.abs(dy) <= yTolerance) return a.x - b.x;
+    return dy;
+  });
+}
+
+/**
+ * Clusters fields into visual rows: consecutive fields (once sorted by `y`)
+ * whose `y` stays within `yTolerance` of the row's first field are grouped
+ * together and ordered left-to-right. Used to lay out same-row form controls
+ * (e.g. a timesheet's Start/End/Pause columns) side by side.
+ */
+export function clusterFieldsIntoRows<T extends SpatialField>(
+  fields: T[],
+  yTolerance = 10
+): T[][] {
+  const sorted = [...fields].sort((a, b) => a.y - b.y);
+  const rows: T[][] = [];
+  for (const f of sorted) {
+    const row = rows[rows.length - 1];
+    if (row && Math.abs(f.y - row[0].y) <= yTolerance) {
+      row.push(f);
+    } else {
+      rows.push([f]);
+    }
+  }
+  return rows.map((row) => row.sort((a, b) => a.x - b.x));
+}
+
 /** Snap guide lines: edges + centers of other fields on the same page. */
 export interface SnapTarget {
   x: number;
