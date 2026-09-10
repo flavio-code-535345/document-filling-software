@@ -120,14 +120,28 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
 
-  // Fit the current page width into the visible stage.
-  const fitWidth = () => {
+  // Fit the current page (width AND height) into the visible stage.
+  const fitPage = () => {
     const el = stageRef.current;
     if (!el) return;
-    const pageWidth = pageSizes[pageIndex]?.width ?? 612;
-    const available = Math.max(160, el.clientWidth - 48); // stage p-6 padding
-    setZoom(roundZoom(clampZoom(available / pageWidth)));
+    const size = pageSizes[pageIndex] ?? { width: 612, height: 792 };
+    const rotated =
+      (pageRotations[pageIndex] ?? 0) === 90 || (pageRotations[pageIndex] ?? 0) === 270;
+    const pw = rotated ? size.height : size.width;
+    const ph = rotated ? size.width : size.height;
+    const availW = Math.max(160, el.clientWidth - 48); // stage p-6 padding
+    const availH = Math.max(160, el.clientHeight - 48);
+    setZoom(roundZoom(clampZoom(Math.min(availW / pw, availH / ph))));
   };
+
+  // Default to "fit to screen" on first mount.
+  const fittedRef = useRef(false);
+  useEffect(() => {
+    if (fittedRef.current) return;
+    fittedRef.current = true;
+    fitPage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const pdfUrl = `/api/templates/${template.id}/pdf?v=${encodeURIComponent(savedAt ?? "0")}`;
 
@@ -510,25 +524,19 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
           <ToolGroup label="Vorlage">
             <Link
               href="/admin"
-              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+              className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
             >
               ← Vorlagen
             </Link>
-            <span className="max-w-52 truncate px-2 py-1 text-sm font-medium">
-              {template.name}
-            </span>
+            <span className="max-w-52 truncate px-2 text-sm font-medium">{template.name}</span>
           </ToolGroup>
 
           <ToolGroup label="Werkzeuge">
             {TOOLS.map((t) => (
-              <button
+              <GroupButton
                 key={t.kind}
+                active={activeTool === t.kind}
                 title={t.label}
-                className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
-                  activeTool === t.kind
-                    ? "bg-accent/25 text-ink"
-                    : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-                }`}
                 onClick={() => {
                   setActiveTool(activeTool === t.kind ? null : t.kind);
                   setPendingMatrix(null);
@@ -536,61 +544,41 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               >
                 <span className="mr-1">{t.icon}</span>
                 {t.label}
-              </button>
+              </GroupButton>
             ))}
           </ToolGroup>
 
           <ToolGroup label="Ansicht">
-            <button
-              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
-                showPanel ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-              }`}
-              onClick={() => setShowPanel((s) => !s)}
-            >
-              Felder
-            </button>
-            <button
-              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
-                showMultiPanel ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-              }`}
-              onClick={() => setShowMultiPanel((s) => !s)}
-            >
-              Massen-Tagging
-            </button>
-            <button
-              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
-                previewEnabled ? "bg-accent/25 text-ink" : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-              }`}
-              onClick={() => setPreviewEnabled((p) => !p)}
-            >
-              Vorschau
-            </button>
+            <GroupButton active={showPanel} title="Feldliste ein-/ausblenden" onClick={() => setShowPanel((s) => !s)}>
+              ▤ Felder
+            </GroupButton>
+            <GroupButton active={previewEnabled} title="Live-Vorschau mit Mustertext" onClick={() => setPreviewEnabled((p) => !p)}>
+              ◉ Vorschau
+            </GroupButton>
+            <GroupButton active={showMultiPanel} title="Massen-Tagging (Größe/Ausrichtung angleichen)" onClick={() => setShowMultiPanel((s) => !s)}>
+              🏷 Mehrfach
+            </GroupButton>
             {previewEnabled && (
               <input
                 value={sampleText}
                 onChange={(e) => setSampleText(e.target.value)}
                 placeholder="Mustertext"
-                className="w-28 rounded-md border border-line bg-canvas px-2 py-1 text-sm"
+                className="h-7 w-28 rounded-md border border-line bg-canvas px-2 text-sm focus:border-accent focus:outline-none"
               />
             )}
           </ToolGroup>
 
           <ToolGroup label="KI">
-            <button
+            <GroupButton
               title="Erkennt leere Felder im Dokument per KI und legt sie automatisch an"
-              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
               disabled={busy || aiScanning}
               onClick={() => void aiScan()}
             >
-              {aiScanning ? "Scannt…" : "KI-Scan ✨"}
-            </button>
-            <button
+              {aiScanning ? "Scannt…" : "✨ KI-Scan"}
+            </GroupButton>
+            <GroupButton
+              active={activeTool === "ai-region"}
               title="Bereich auf der Seite ziehen — KI scannt nur diesen Ausschnitt"
-              className={`rounded-md px-2.5 py-1 text-sm transition-colors ${
-                activeTool === "ai-region"
-                  ? "bg-accent/25 text-ink"
-                  : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-              }`}
               disabled={busy || aiScanning}
               onClick={() => {
                 setActiveTool(activeTool === "ai-region" ? null : "ai-region");
@@ -598,65 +586,50 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               }}
             >
               🔍 KI-Bereich
-            </button>
+            </GroupButton>
           </ToolGroup>
 
           <ToolGroup label="Zoom">
-            <button
-              className="rounded-md px-2 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
-              title="Verkleinern"
-              disabled={zoom <= MIN_ZOOM}
-              onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}
-            >
-              −
-            </button>
-            <button
-              className="w-14 rounded-md px-1 py-1 text-center text-sm tabular-nums text-ink-dim hover:bg-surface-2 hover:text-ink"
-              title="Auf 100% zurücksetzen"
-              onClick={() => setZoom(1)}
-            >
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              className="rounded-md px-2 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
-              title="Vergrößern"
-              disabled={zoom >= MAX_ZOOM}
-              onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_IN_FACTOR)))}
-            >
-              +
-            </button>
-            <button
-              className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
-              title="An Seitenbreite anpassen"
-              onClick={fitWidth}
-            >
-              ⤢ Fit
-            </button>
+            <div className="flex items-center gap-0.5">
+              <GroupButton title="Verkleinern" disabled={zoom <= MIN_ZOOM} onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}>
+                −
+              </GroupButton>
+              <button
+                className="inline-flex h-7 w-14 items-center justify-center rounded-md text-sm tabular-nums text-ink-dim hover:bg-surface-2 hover:text-ink"
+                title="Auf 100% zurücksetzen"
+                onClick={() => setZoom(1)}
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <GroupButton title="Vergrößern" disabled={zoom >= MAX_ZOOM} onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_IN_FACTOR)))}>
+                +
+              </GroupButton>
+              <span className="mx-0.5 h-4 w-px bg-line" />
+              <GroupButton title="Seite in den sichtbaren Bereich einpassen" onClick={fitPage}>
+                ⤢ Fit
+              </GroupButton>
+            </div>
           </ToolGroup>
 
           <ToolGroup label="Seite drehen">
             {([0, 90, 180, 270] as PageRotation[]).map((r) => (
-              <button
+              <GroupButton
                 key={r}
-                className={`rounded-md px-2 py-1 text-sm transition-colors ${
-                  (pageRotations[pageIndex] ?? 0) === r
-                    ? "bg-accent/25 text-ink"
-                    : "text-ink-dim hover:bg-surface-2 hover:text-ink"
-                }`}
+                active={(pageRotations[pageIndex] ?? 0) === r}
                 title={`Seite ${pageIndex + 1} um ${r}° drehen`}
                 onClick={() => setPageRotation(pageIndex, r)}
               >
                 {r}°
-              </button>
+              </GroupButton>
             ))}
           </ToolGroup>
 
-          <div className="ml-auto flex flex-col items-end gap-1">
-            <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+          <div className="ml-auto flex flex-col items-end gap-1.5">
+            <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-dim/70">
               Datei
             </span>
-            <div className="flex items-center gap-1 rounded-lg border border-line bg-surface/60 p-1">
-              <label className="cursor-pointer rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink">
+            <div className="flex items-center gap-0.5 rounded-lg border border-line/60 bg-surface/50 p-0.5">
+              <label className="inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink">
                 PDF ersetzen
                 <input
                   type="file"
@@ -670,19 +643,19 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
                   }}
                 />
               </label>
-              <span className="mx-1 h-4 border-l border-line" />
-              <span className="px-2 text-xs text-ink-dim">
+              <span className="mx-0.5 h-4 w-px bg-line" />
+              <span className="px-2 text-xs tabular-nums text-ink-dim">
                 {dirty ? "Ungespeichert" : savedAt ? "Gespeichert" : ""}
               </span>
               <button
-                className="rounded-md px-2.5 py-1 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
+                className="inline-flex h-7 items-center rounded-md px-2 text-sm text-ink-dim hover:bg-surface-2 hover:text-ink"
                 disabled={!dirty || busy}
                 onClick={discard}
               >
                 Verwerfen
               </button>
               <button
-                className="rounded-md bg-accent-strong px-3 py-1 text-sm font-semibold text-white"
+                className="inline-flex h-7 items-center rounded-md bg-accent-strong px-3 text-sm font-semibold text-white disabled:opacity-40"
                 disabled={!dirty || busy}
                 onClick={save}
               >
@@ -853,14 +826,44 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
 
 function ToolGroup({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <span className="px-1 text-[10px] font-semibold uppercase tracking-wider text-ink-dim">
+    <div className="flex flex-col gap-1.5">
+      <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-dim/70">
         {label}
       </span>
-      <div className="flex items-center gap-1 rounded-lg border border-line bg-surface/60 p-1">
+      <div className="flex items-center gap-0.5 rounded-lg border border-line/60 bg-surface/50 p-0.5">
         {children}
       </div>
     </div>
+  );
+}
+
+function GroupButton({
+  active,
+  disabled,
+  title,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={`inline-flex h-7 items-center gap-1 rounded-md px-2 text-sm transition-colors disabled:opacity-40 ${
+        active
+          ? "bg-accent/20 font-medium text-ink"
+          : "text-ink-dim hover:bg-surface-2 hover:text-ink"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 
