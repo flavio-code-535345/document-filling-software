@@ -46,6 +46,12 @@ export interface TemplateField {
   textColor?: string;
   /** Fields sharing a linkKey are filled from a single input in the fill form. */
   linkKey?: string;
+  /**
+   * Excel-like formula: computed automatically from other fields' values,
+   * e.g. "{Stunden Montag} + {Stunden Dienstag}" or "ROUND(SUM({A},{B}) / 2, 1)".
+   * Reference other fields by label in curly braces. Read-only in the fill form.
+   */
+  formula?: string;
   // Matrix/grid specific
   matrixRows?: string[];
   matrixCols?: string[];

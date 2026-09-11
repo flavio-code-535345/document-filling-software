@@ -25,6 +25,7 @@ function normalizeHex(value: string | undefined): string {
  */
 export default function Inspector({
   field,
+  allFields,
   pageCount,
   zoom,
   feintuningActive,
@@ -36,6 +37,7 @@ export default function Inspector({
   onCopy,
 }: {
   field: TemplateField | null;
+  allFields: TemplateField[];
   pageCount: number;
   zoom: number;
   feintuningActive: boolean;
@@ -309,6 +311,54 @@ export default function Inspector({
                 <option value="visible">Überlauf erlauben</option>
               </select>
             </label>
+          </div>
+        )}
+
+        {field.kind === "text" && (
+          <div className="space-y-2 border-t border-line pt-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold">Formel (optional)</h4>
+              {field.formula && (
+                <button
+                  className="text-xs text-red-400 hover:underline"
+                  onClick={() => onPatch({ formula: undefined })}
+                >
+                  entfernen
+                </button>
+              )}
+            </div>
+            <textarea
+              rows={2}
+              className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 font-mono text-xs"
+              placeholder="z. B. {Stunden Montag} + {Stunden Dienstag}"
+              value={field.formula ?? ""}
+              onChange={(e) => onPatch({ formula: e.target.value || undefined })}
+            />
+            {allFields.filter((f) => f.id !== field.id && f.label).length > 0 && (
+              <select
+                className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-xs text-ink-dim"
+                value=""
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  onPatch({ formula: `${field.formula ?? ""}{${e.target.value}}` });
+                }}
+              >
+                <option value="">+ Feld einfügen…</option>
+                {allFields
+                  .filter((f) => f.id !== field.id && f.label)
+                  .map((f) => (
+                    <option key={f.id} value={f.label}>
+                      {f.label}
+                    </option>
+                  ))}
+              </select>
+            )}
+            <p className="text-[11px] leading-snug text-ink-dim">
+              Verweist per <code className="rounded bg-surface-2 px-1">{"{Bezeichnung}"}</code> auf
+              andere Felder. Operatoren <code className="rounded bg-surface-2 px-1">+ − * / ( )</code>,
+              Funktionen SUM, MIN, MAX, AVG, ABS, ROUND. Wird beim Ausfüllen automatisch berechnet
+              (schreibgeschützt) — Formeln können auch aufeinander verweisen.
+            </p>
           </div>
         )}
 

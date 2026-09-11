@@ -772,6 +772,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
 
       <Inspector
         field={selected}
+        allFields={fields}
         pageCount={pageCount}
         zoom={zoom}
         feintuningActive={feintuning === selected?.id}

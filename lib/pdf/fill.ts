@@ -3,6 +3,7 @@
 // Placement math comes from lib/geometry (shared with browser previews).
 import { PDFDocument, PDFFont, StandardFonts, degrees, rgb, type RGB } from "pdf-lib";
 import type { FillValues, StoredTemplate, TemplateField } from "../types";
+import { evaluateFormulas } from "../formula";
 import {
   baselineFromTop,
   fitMultiline,
@@ -100,10 +101,14 @@ export async function fillPdf(
     if (rot) page.setRotation(degrees(rot));
   });
 
+  // Compute formula fields server-side too (authoritative, independent of
+  // whatever the client submitted for them).
+  const computedValues = evaluateFormulas(template.fields, values);
+
   for (const field of template.fields) {
     const page = pages[field.page];
     if (!page) continue;
-    const value = values[field.id];
+    const value = computedValues[field.id];
     if (value === undefined || value === null || value === "") continue;
     const { height: pageHeight } = page.getSize();
 
@@ -221,7 +226,8 @@ export function buildFilenameParts(
   template: StoredTemplate,
   values: FillValues
 ): { label: string; value: string }[] {
+  const computed = evaluateFormulas(template.fields, values);
   return template.fields
     .filter((f) => f.inFileName)
-    .map((f) => ({ label: f.label, value: String(values[f.id] ?? "") }));
+    .map((f) => ({ label: f.label, value: String(computed[f.id] ?? "") }));
 }

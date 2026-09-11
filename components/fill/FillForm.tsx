@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
+import { evaluateFormulas } from "@/lib/formula";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
@@ -360,9 +361,14 @@ export default function FillForm({
     });
   };
 
+  const computedValues = useMemo(
+    () => evaluateFormulas(template.fields ?? [], values),
+    [template.fields, values]
+  );
+
   const previewValues: PreviewValues = useMemo(
-    () => values as PreviewValues,
-    [values]
+    () => computedValues as PreviewValues,
+    [computedValues]
   );
 
   const jumpPreview = (page: number) => {
@@ -655,7 +661,7 @@ export default function FillForm({
                       <FieldControl
                         key={group.fields[0].id}
                         group={group}
-                        value={values[group.fields[0].id]}
+                        value={computedValues[group.fields[0].id]}
                         hasDefaultSignature={hasDefaultSignature}
                         linked={group.fields.length > 1}
                         onFocus={() => jumpPreview(pageIndex)}
@@ -675,7 +681,7 @@ export default function FillForm({
                           <FieldControl
                             key={col}
                             group={group}
-                            value={values[group.fields[0].id]}
+                            value={computedValues[group.fields[0].id]}
                             hasDefaultSignature={hasDefaultSignature}
                             linked={group.fields.length > 1}
                             labelOverride={COLUMN_LABELS[col]}
@@ -771,6 +777,17 @@ function FieldControl({
   const label = labelOverride ?? f.label ?? "Feld";
 
   const control = (() => {
+    if (f.formula) {
+      const text = typeof value === "string" ? value : "";
+      return (
+        <div
+          className="flex h-9 items-center rounded-lg border border-dashed border-line bg-surface-2/50 px-3 text-sm tabular-nums text-ink"
+          title="Automatisch berechnet (Formel)"
+        >
+          {text || "—"}
+        </div>
+      );
+    }
     switch (f.kind) {
       case "text":
       case "date":
