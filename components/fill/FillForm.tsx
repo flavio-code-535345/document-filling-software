@@ -106,6 +106,35 @@ function buildPageLayout(pageGroups: LinkedGroup[]): PageLayout {
   return { general, days };
 }
 
+type DayBlock =
+  | { type: "full"; day: DayLayout; cols: TimesheetColumn[] }
+  | { type: "simple"; days: { day: DayLayout; col: TimesheetColumn }[] };
+
+/**
+ * Groups a page's days into render blocks: a day with more than one
+ * timesheet column (a full Von/Bis/Pause/Stunden row) keeps its own
+ * dedicated row, sized to only the columns it actually has; consecutive
+ * days that carry just a single column (typically only "Datum", e.g. a day
+ * with no Von/Bis on this document) are bundled into one compact row
+ * instead of each reserving a full-width grid row that's mostly empty.
+ */
+function groupDayBlocks(days: DayLayout[]): DayBlock[] {
+  const blocks: DayBlock[] = [];
+  for (const day of days) {
+    const cols = COLUMN_ORDER.filter((c) => day.columns[c]);
+    if (cols.length <= 1) {
+      const col = cols[0];
+      if (!col) continue;
+      const last = blocks[blocks.length - 1];
+      if (last?.type === "simple") last.days.push({ day, col });
+      else blocks.push({ type: "simple", days: [{ day, col }] });
+    } else {
+      blocks.push({ type: "full", day, cols });
+    }
+  }
+  return blocks;
+}
+
 /**
  * Groups fields into single controls: fields with a shared linkKey collapse
  * into one input; unlinked fields fall back to identical label+kind (legacy).
@@ -700,30 +729,55 @@ export default function FillForm({
                   </div>
                 )}
 
-                {layout.days.map((day) => (
-                  <div key={day.key} className="mt-6">
-                    <h4 className="mb-2 text-sm font-semibold">{day.label}</h4>
-                    <div className="grid grid-cols-5 gap-4">
-                      {COLUMN_ORDER.map((col) => {
-                        const group = day.columns[col];
-                        return group ? (
-                          <FieldControl
-                            key={col}
-                            group={group}
-                            value={computedValues[group.fields[0].id]}
-                            hasDefaultSignature={hasDefaultSignature}
-                            linked={group.fields.length > 1}
-                            labelOverride={COLUMN_LABELS[col]}
-                            onFocus={() => jumpPreview(pageIndex)}
-                            onChange={(v) => setGroupValue(group, v)}
-                          />
-                        ) : (
-                          <div key={col} />
+                {groupDayBlocks(layout.days).map((block, i) =>
+                  block.type === "full" ? (
+                    <div key={block.day.key} className="mt-6">
+                      <h4 className="mb-2 text-sm font-semibold">{block.day.label}</h4>
+                      <div
+                        className="grid gap-4"
+                        style={{ gridTemplateColumns: `repeat(${block.cols.length}, minmax(0, 1fr))` }}
+                      >
+                        {block.cols.map((col) => {
+                          const group = block.day.columns[col]!;
+                          return (
+                            <FieldControl
+                              key={col}
+                              group={group}
+                              value={computedValues[group.fields[0].id]}
+                              hasDefaultSignature={hasDefaultSignature}
+                              linked={group.fields.length > 1}
+                              labelOverride={COLUMN_LABELS[col]}
+                              onFocus={() => jumpPreview(pageIndex)}
+                              onChange={(v) => setGroupValue(group, v)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : (
+                    // Days that only carry a single column (typically just a
+                    // date) share one compact row instead of each burning a
+                    // full-width grid row with mostly empty space.
+                    <div key={`simple-${i}`} className="mt-6 flex flex-wrap gap-4">
+                      {block.days.map(({ day, col }) => {
+                        const group = day.columns[col]!;
+                        return (
+                          <div key={day.key} className="w-40">
+                            <FieldControl
+                              group={group}
+                              value={computedValues[group.fields[0].id]}
+                              hasDefaultSignature={hasDefaultSignature}
+                              linked={group.fields.length > 1}
+                              labelOverride={day.label}
+                              onFocus={() => jumpPreview(pageIndex)}
+                              onChange={(v) => setGroupValue(group, v)}
+                            />
+                          </div>
                         );
                       })}
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
               </section>
             );
           })}

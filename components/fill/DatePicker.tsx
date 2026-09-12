@@ -146,12 +146,9 @@ export default function DatePicker({
           onFocus?.();
           setOpen((o) => !o);
         }}
-        className="flex w-full items-center justify-between gap-2 rounded-lg border border-line bg-canvas px-3 py-2 text-left text-sm focus:border-accent focus:outline-none"
+        className="block w-full rounded-lg border border-line bg-canvas px-3 py-2 text-left text-sm focus:border-accent focus:outline-none"
       >
         <span className={value ? "text-ink" : "text-ink-dim"}>{value ? formatDe(value) : placeholder}</span>
-        <span aria-hidden className="text-ink-dim">
-          📅
-        </span>
       </button>
 
       {open && (
