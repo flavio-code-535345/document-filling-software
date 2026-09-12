@@ -790,10 +790,34 @@ function FieldControl({
     }
     switch (f.kind) {
       case "text":
+        if (f.digitBoxes && f.digitBoxes > 1) {
+          return (
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={f.digitBoxes}
+              placeholder={"_".repeat(f.digitBoxes)}
+              title={`${f.digitBoxes}-stellig, z. B. Kalenderwoche`}
+              className="w-24 rounded-lg border border-line bg-canvas px-3 py-2 text-center font-mono text-sm tracking-[0.3em] focus:border-accent focus:outline-none"
+              value={typeof value === "string" ? value : ""}
+              onFocus={onFocus}
+              onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, f.digitBoxes))}
+            />
+          );
+        }
+        return (
+          <input
+            type="text"
+            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
+            value={typeof value === "string" ? value : ""}
+            onFocus={onFocus}
+            onChange={(e) => onChange(String(e.target.value))}
+          />
+        );
       case "date":
         return (
           <input
-            type={f.kind === "date" ? "date" : "text"}
+            type="date"
             className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
             value={typeof value === "string" ? value : ""}
             onFocus={onFocus}

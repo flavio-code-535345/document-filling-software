@@ -38,6 +38,13 @@ export interface TemplateField {
   valign?: VerticalAlign;
   /** How to handle text that exceeds the field box. "shrink" scales down; "visible" allows overflow. */
   overflow?: OverflowMode;
+  /**
+   * Splits a "text" field's box into this many equal-width boxes, one
+   * character each (e.g. a two-digit Kalenderwoche/KW field printed as two
+   * separate squares). `align` is ignored in this mode — each character is
+   * always centered in its own box; `valign`/`overflow` still apply.
+   */
+  digitBoxes?: number;
   /** Typography overrides (default: Helvetica, normal weight/style, black). */
   fontFamily?: FontFamily;
   fontWeight?: FontWeight;

@@ -6,6 +6,8 @@ import type { FillValues, StoredTemplate, TemplateField } from "../types";
 import { evaluateFormulas } from "../formula";
 import {
   baselineFromTop,
+  digitBoxRects,
+  fitDigitBoxFont,
   fitMultiline,
   fitSingleLine,
   formatGermanDate,
@@ -113,11 +115,47 @@ export async function fillPdf(
     const { height: pageHeight } = page.getSize();
 
     switch (field.kind) {
-      case "text":
+      case "text": {
+        const raw = String(value).trim();
+        if (!raw) break;
+        const font = await getFont(field);
+        const measure = (s: string, sz: number) => font.widthOfTextAtSize(s, sz);
+
+        if (field.digitBoxes && field.digitBoxes > 1) {
+          const rects = digitBoxRects(field, field.digitBoxes);
+          const chars = raw.slice(0, rects.length).split("");
+          const boxWidth = rects[0]?.width ?? field.width;
+          const size = fitDigitBoxFont(field, chars, boxWidth, measure, field.overflow);
+          const baseline = baselineFromTop(field, size, field.valign);
+          chars.forEach((ch, i) => {
+            const rect = rects[i];
+            const width = font.widthOfTextAtSize(ch, size);
+            page.drawText(ch, {
+              x: rect.x + (rect.width - width) / 2,
+              y: pageHeight - field.y - baseline,
+              size,
+              font,
+              color: hexToRgb(field.textColor),
+            });
+          });
+          break;
+        }
+
+        const size = fitSingleLine(field, raw, measure, field.overflow);
+        const width = font.widthOfTextAtSize(raw, size);
+        page.drawText(raw, {
+          x: textAlignX(field, width, field.align),
+          y: pageHeight - field.y - baselineFromTop(field, size, field.valign),
+          size,
+          font,
+          color: hexToRgb(field.textColor),
+        });
+        break;
+      }
       case "date": {
         const raw = String(value).trim();
         if (!raw) break;
-        const text = field.kind === "date" ? formatGermanDate(raw) : raw;
+        const text = formatGermanDate(raw);
         const font = await getFont(field);
         const size = fitSingleLine(
           field,

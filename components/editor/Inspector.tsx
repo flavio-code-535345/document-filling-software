@@ -378,6 +378,32 @@ export default function Inspector({
                 <option value="visible">Überlauf erlauben</option>
               </select>
             </label>
+
+            {field.kind === "text" && (
+              <label className="block text-xs text-ink-dim">
+                Ziffern-Boxen (z. B. KW)
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  placeholder="Aus"
+                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                  value={field.digitBoxes ?? ""}
+                  onChange={(e) => {
+                    const n = Math.round(Number(e.target.value));
+                    onPatch({ digitBoxes: !e.target.value || n <= 1 ? undefined : Math.min(10, n) });
+                  }}
+                />
+                {field.digitBoxes && field.digitBoxes > 1 ? (
+                  <span className="mt-1 block text-[11px] leading-snug text-ink-dim/80">
+                    Teilt das Feld in {field.digitBoxes} gleich breite Boxen, je ein Zeichen —
+                    für zweistellige Felder wie eine Kalenderwoche, die in zwei separate
+                    Kästchen gedruckt ist. Ausrichtung wird dabei ignoriert (immer zentriert je
+                    Box); im Ausfüllformular sind nur Ziffern erlaubt.
+                  </span>
+                ) : null}
+              </label>
+            )}
           </div>
         )}
 
