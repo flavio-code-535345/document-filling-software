@@ -7,6 +7,7 @@ import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
 import SignatureInput from "./SignatureInput";
+import DatePicker from "./DatePicker";
 
 interface LinkedGroup {
   key: string;
@@ -585,21 +586,11 @@ export default function FillForm({
                     <div className="flex flex-wrap items-end gap-2">
                       <label className="text-xs text-ink-dim">
                         Von
-                        <input
-                          type="date"
-                          className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
-                          value={seriesStart}
-                          onChange={(e) => setSeriesStart(e.target.value)}
-                        />
+                        <DatePicker className="mt-1 w-36" value={seriesStart} onChange={setSeriesStart} />
                       </label>
                       <label className="text-xs text-ink-dim">
                         Bis
-                        <input
-                          type="date"
-                          className="mt-1 block rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
-                          value={seriesEnd}
-                          onChange={(e) => setSeriesEnd(e.target.value)}
-                        />
+                        <DatePicker className="mt-1 w-36" value={seriesEnd} onChange={setSeriesEnd} />
                       </label>
                       <button
                         type="button"
@@ -854,12 +845,10 @@ function FieldControl({
         );
       case "date":
         return (
-          <input
-            type="date"
-            className="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
+          <DatePicker
             value={typeof value === "string" ? value : ""}
             onFocus={onFocus}
-            onChange={(e) => onChange(String(e.target.value))}
+            onChange={(v) => onChange(v)}
           />
         );
       case "multiline":
