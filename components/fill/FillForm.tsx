@@ -135,6 +135,39 @@ function isoWeekDates(year: number, week: number, count: number): string[] {
   return out;
 }
 
+/**
+ * ISO-8601 week number (Monday-first; week 1 is the week containing the
+ * year's first Thursday) for a given date, via the standard "nearest
+ * Thursday" trick: shifting to that Thursday makes the week/year unambiguous
+ * even for the first/last days of a year.
+ */
+function isoWeekOf(date: Date): { year: number; week: number } {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7; // Mon=1 … Sun=7
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return { year: d.getUTCFullYear(), week };
+}
+
+/** A "Kalenderwoche" field: labeled KW/Kalenderwoche and split into digit
+ * boxes (the two-digit week-number squares this whole feature was built for). */
+function isKwField(f: TemplateField): boolean {
+  return f.kind === "text" && !!f.digitBoxes && f.digitBoxes > 1 && /\bkw\b|kalenderwoche/i.test(f.label);
+}
+
+/** Defaults every KW field to the current ISO week, so the form opens
+ * already showing "this week" instead of blank boxes. Only ever used as an
+ * initial/fallback value — a loaded draft's own values still win. */
+function defaultKwValues(fields: TemplateField[]): Record<string, FieldValue> {
+  const { week } = isoWeekOf(new Date());
+  const out: Record<string, FieldValue> = {};
+  for (const f of fields) {
+    if (isKwField(f)) out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
+  }
+  return out;
+}
+
 /** Document reading order for a list of fields: page → y → x. */
 function docOrder(groups: LinkedGroup[]): LinkedGroup[] {
   return [...groups].sort((a, b) => {
@@ -160,7 +193,9 @@ export default function FillForm({
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
   );
-  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>(() =>
+    defaultKwValues(template.fields ?? [])
+  );
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -177,8 +212,8 @@ export default function FillForm({
   const [seriesMode, setSeriesMode] = useState<"range" | "week">("range");
   const [seriesStart, setSeriesStart] = useState("");
   const [seriesEnd, setSeriesEnd] = useState("");
-  const [seriesYear, setSeriesYear] = useState(String(new Date().getFullYear()));
-  const [seriesWeek, setSeriesWeek] = useState("");
+  const [seriesYear, setSeriesYear] = useState(() => String(isoWeekOf(new Date()).year));
+  const [seriesWeek, setSeriesWeek] = useState(() => String(isoWeekOf(new Date()).week));
   const [showSeries, setShowSeries] = useState(true);
 
   // ---- auto-draft: persist to the server as the user types ----
@@ -199,7 +234,10 @@ export default function FillForm({
         if (!hydratedRef.current) {
           hydratedRef.current = true;
           const auto = fills.find((f) => f.auto);
-          if (auto) setValues(auto.values ?? {});
+          // Merge (not replace): an auto-draft saved before a KW field
+          // existed, or one that never touched it, shouldn't lose the
+          // current-week default that's already showing.
+          if (auto) setValues((v) => ({ ...v, ...(auto.values ?? {}) }));
         }
       } catch {
         if (!cancelled) hydratedRef.current = true;
