@@ -39,6 +39,13 @@ export interface TemplateField {
   /** How to handle text that exceeds the field box. "shrink" scales down; "visible" allows overflow. */
   overflow?: OverflowMode;
   /**
+   * Pre-fills the fill form with this value on load (e.g. a shift's usual
+   * "06:00" start time). Purely a fill-form convenience — a loaded draft or
+   * anything the user types still wins; never used at export time on its
+   * own. Applies to "text", "date" and "multiline" kinds.
+   */
+  defaultValue?: string;
+  /**
    * Splits a "text" field's box into this many equal-width boxes, one
    * character each (e.g. a two-digit Kalenderwoche/KW field printed as two
    * separate squares). `align` is ignored in this mode — each character is

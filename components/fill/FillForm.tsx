@@ -27,14 +27,28 @@ const COLUMN_LABELS: Record<TimesheetColumn, string> = {
   stunden: "Stunden",
 };
 
+/**
+ * JavaScript's `\b` word boundary is ASCII-only: it treats "ä ö ü ß" (and
+ * other accented letters) as non-word characters, so a word like
+ * "Frühschicht" reads to `\b` as two tokens, "Fr" + "ühschicht" — letting a
+ * bare two-letter day abbreviation like "fr" (Freitag) match *inside* an
+ * unrelated German word purely because an umlaut happens to follow it. Build
+ * day/column regexes with this Unicode-aware boundary instead, so a match
+ * requires an actual accented-letter-aware word boundary on both sides.
+ */
+const DE_WORD_CHAR = "[A-Za-zÀ-ÖØ-öø-ÿ]";
+function deWordRe(alternatives: string): RegExp {
+  return new RegExp(`(?<!${DE_WORD_CHAR})(?:${alternatives})(?!${DE_WORD_CHAR})`, "i");
+}
+
 const DAY_DEFS: { key: string; label: string; re: RegExp }[] = [
-  { key: "mo", label: "Montag", re: /\b(montag|mo)\b/i },
-  { key: "di", label: "Dienstag", re: /\b(dienstag|di)\b/i },
-  { key: "mi", label: "Mittwoch", re: /\b(mittwoch|mi)\b/i },
-  { key: "do", label: "Donnerstag", re: /\b(donnerstag|do)\b/i },
-  { key: "fr", label: "Freitag", re: /\b(freitag|fr)\b/i },
-  { key: "sa", label: "Samstag", re: /\b(samstag|sa)\b/i },
-  { key: "so", label: "Sonntag", re: /\b(sonntag|so)\b/i },
+  { key: "mo", label: "Montag", re: deWordRe("montag|mo") },
+  { key: "di", label: "Dienstag", re: deWordRe("dienstag|di") },
+  { key: "mi", label: "Mittwoch", re: deWordRe("mittwoch|mi") },
+  { key: "do", label: "Donnerstag", re: deWordRe("donnerstag|do") },
+  { key: "fr", label: "Freitag", re: deWordRe("freitag|fr") },
+  { key: "sa", label: "Samstag", re: deWordRe("samstag|sa") },
+  { key: "so", label: "Sonntag", re: deWordRe("sonntag|so") },
 ];
 
 /** Resolve a field label to a day-of-week key ("mo"…"so"), or null. */
@@ -46,11 +60,11 @@ function detectDay(label: string): string | null {
 /** Resolve a field label to one of the five timesheet columns, or null. */
 function detectColumn(label: string): TimesheetColumn | null {
   const l = label.toLowerCase();
-  if (/\bdatum\b/.test(l)) return "datum";
-  if (/\bvon\b|\bbeginn\b|\bstart\b|\banfang\b/.test(l)) return "von";
-  if (/\bbis\b|\bende\b/.test(l)) return "bis";
-  if (/\bpause\b/.test(l)) return "pause";
-  if (/\bstunden\b|\barbeitszeit\b|\bgesamt\b/.test(l)) return "stunden";
+  if (deWordRe("datum").test(l)) return "datum";
+  if (deWordRe("von|beginn|start|anfang").test(l)) return "von";
+  if (deWordRe("bis|ende").test(l)) return "bis";
+  if (deWordRe("pause").test(l)) return "pause";
+  if (deWordRe("stunden|arbeitszeit|gesamt").test(l)) return "stunden";
   return null;
 }
 
@@ -152,14 +166,19 @@ function groupFields(fields: TemplateField[]): LinkedGroup[] {
   }));
 }
 
-/** ISO-8601 dates of a calendar week (Monday-first), up to `count` days. */
+/**
+ * ISO-8601 dates of a calendar week (Monday-first), starting from `week`.
+ * `count` isn't capped at 7 — a document with more than one week's worth of
+ * date fields (e.g. a duplex two-week timesheet) just keeps counting into
+ * the following week(s), Monday-first throughout.
+ */
 function isoWeekDates(year: number, week: number, count: number): string[] {
   const jan4 = Date.UTC(year, 0, 4);
   const dow = new Date(jan4).getUTCDay();
   const week1Monday = jan4 - ((dow + 6) % 7) * 86400000;
   const monday = week1Monday + (week - 1) * 7 * 86400000;
   const out: string[] = [];
-  for (let i = 0; i < Math.min(Math.max(0, count), 7); i++) {
+  for (let i = 0; i < Math.max(0, count); i++) {
     out.push(new Date(monday + i * 86400000).toISOString().slice(0, 10));
   }
   return out;
@@ -186,14 +205,36 @@ function isKwField(f: TemplateField): boolean {
   return f.kind === "text" && !!f.digitBoxes && f.digitBoxes > 1 && /\bkw\b|kalenderwoche/i.test(f.label);
 }
 
-/** Defaults every KW field to the current ISO week, so the form opens
- * already showing "this week" instead of blank boxes. Only ever used as an
- * initial/fallback value — a loaded draft's own values still win. */
+/**
+ * Defaults every KW field to the current ISO week, so the form opens already
+ * showing "this week" instead of blank boxes. A document can carry more than
+ * one KW field (e.g. a duplex two-week Früh-/Spätschicht sheet, one KW box
+ * per page/week) — those are numbered in document order, one week apart, so
+ * the first box gets the current week, the second the following week, and so
+ * on, correctly rolling over a year boundary. Only ever used as an
+ * initial/fallback value — a loaded draft's own values still win.
+ */
 function defaultKwValues(fields: TemplateField[]): Record<string, FieldValue> {
-  const { week } = isoWeekOf(new Date());
+  const kwFields = fields
+    .filter(isKwField)
+    .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+  const today = new Date();
+  const out: Record<string, FieldValue> = {};
+  kwFields.forEach((f, i) => {
+    const { week } = isoWeekOf(new Date(today.getTime() + i * 7 * 86400000));
+    out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
+  });
+  return out;
+}
+
+/** Seeds every field that has a configured `defaultValue` (e.g. a shift's
+ * usual Von/Bis/Pause/Normalstd), so recurring values don't need retyping on
+ * every fill. Only used as an initial/fallback value — a loaded draft's own
+ * values, or a value the user already typed, still win. */
+function defaultStaticValues(fields: TemplateField[]): Record<string, FieldValue> {
   const out: Record<string, FieldValue> = {};
   for (const f of fields) {
-    if (isKwField(f)) out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
+    if (f.defaultValue) out[f.id] = f.defaultValue;
   }
   return out;
 }
@@ -223,9 +264,10 @@ export default function FillForm({
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
   );
-  const [values, setValues] = useState<Record<string, FieldValue>>(() =>
-    defaultKwValues(template.fields ?? [])
-  );
+  const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
+    ...defaultStaticValues(template.fields ?? []),
+    ...defaultKwValues(template.fields ?? []),
+  }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
