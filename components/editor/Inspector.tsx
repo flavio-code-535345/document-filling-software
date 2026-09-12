@@ -404,6 +404,24 @@ export default function Inspector({
                 ) : null}
               </label>
             )}
+
+            {!field.formula && (
+              <label className="block text-xs text-ink-dim">
+                Standardwert
+                <input
+                  type="text"
+                  placeholder="z. B. 06:00"
+                  className="mt-1 w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm"
+                  value={field.defaultValue ?? ""}
+                  onChange={(e) => onPatch({ defaultValue: e.target.value || undefined })}
+                />
+                <span className="mt-1 block text-[11px] leading-snug text-ink-dim/80">
+                  Füllt das Feld im Ausfüllformular schon beim Öffnen mit diesem Wert vor —
+                  praktisch für wiederkehrende Angaben wie feste Schichtzeiten. Ein gespeicherter
+                  Entwurf oder eine eigene Eingabe hat immer Vorrang.
+                </span>
+              </label>
+            )}
           </div>
         )}
 
