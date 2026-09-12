@@ -11,6 +11,7 @@ type Token =
   | { type: "ref"; value: string }
   | { type: "ident"; value: string }
   | { type: "op"; value: "+" | "-" | "*" | "/" | "%" }
+  | { type: "cmp"; value: "=" | "<>" | "<" | "<=" | ">" | ">=" }
   | { type: "lparen" }
   | { type: "rparen" }
   | { type: "comma" };
@@ -25,6 +26,29 @@ const FUNCTIONS: Record<string, (args: number[]) => number> = {
     const factor = 10 ** (args[1] ?? 0);
     return Math.round((args[0] ?? 0) * factor) / factor;
   },
+  ROUNDUP: (args) => {
+    const factor = 10 ** (args[1] ?? 0);
+    const n = (args[0] ?? 0) * factor;
+    return (n >= 0 ? Math.ceil(n) : Math.floor(n)) / factor;
+  },
+  ROUNDDOWN: (args) => {
+    const factor = 10 ** (args[1] ?? 0);
+    const n = (args[0] ?? 0) * factor;
+    return (n >= 0 ? Math.floor(n) : Math.ceil(n)) / factor;
+  },
+  CEIL: (args) => Math.ceil(args[0] ?? 0),
+  FLOOR: (args) => Math.floor(args[0] ?? 0),
+  // Excel-style modulo: result takes the sign of the divisor (unlike the `%`
+  // operator below, which follows JS semantics and keeps the dividend's sign).
+  MOD: (args) => {
+    const a = args[0] ?? 0;
+    const b = args[1] ?? 0;
+    return b === 0 ? 0 : a - b * Math.floor(a / b);
+  },
+  IF: (args) => ((args[0] ?? 0) !== 0 ? args[1] ?? 0 : args[2] ?? 0),
+  AND: (args) => (args.length > 0 && args.every((a) => a !== 0) ? 1 : 0),
+  OR: (args) => (args.some((a) => a !== 0) ? 1 : 0),
+  NOT: (args) => ((args[0] ?? 0) === 0 ? 1 : 0),
 };
 
 function tokenize(expr: string): Token[] {
@@ -58,17 +82,59 @@ function tokenize(expr: string): Token[] {
       i++;
       continue;
     }
-    if (c === ",") {
+    // ";" is accepted as an unambiguous alternative to "," for separating
+    // function arguments (the same convention spreadsheet apps use in
+    // comma-decimal locales): writing e.g. MOD(10,3) is genuinely ambiguous
+    // between the two arguments 10 and 3, and the decimal number 10,3 — the
+    // tokenizer resolves that in favor of the decimal (see below), so a
+    // formula that truly means two adjacent numeric arguments needs either a
+    // space after the comma (MOD(10, 3)) or a semicolon (MOD(10;3)).
+    if (c === "," || c === ";") {
       tokens.push({ type: "comma" });
       i++;
+      continue;
+    }
+    if (c === "=") {
+      tokens.push({ type: "cmp", value: "=" });
+      i++;
+      continue;
+    }
+    if (c === "<") {
+      if (expr[i + 1] === "=") {
+        tokens.push({ type: "cmp", value: "<=" });
+        i += 2;
+      } else if (expr[i + 1] === ">") {
+        tokens.push({ type: "cmp", value: "<>" });
+        i += 2;
+      } else {
+        tokens.push({ type: "cmp", value: "<" });
+        i++;
+      }
+      continue;
+    }
+    if (c === ">") {
+      if (expr[i + 1] === "=") {
+        tokens.push({ type: "cmp", value: ">=" });
+        i += 2;
+      } else {
+        tokens.push({ type: "cmp", value: ">" });
+        i++;
+      }
       continue;
     }
     if (/[0-9.,]/.test(c)) {
       let j = i;
       let s = "";
-      while (j < expr.length && /[0-9.,]/.test(expr[j])) {
-        s += expr[j];
-        j++;
+      while (j < expr.length) {
+        const ch = expr[j];
+        // A "," is only part of this number as a German-style decimal
+        // separator (e.g. "3,5") when a digit actually follows — otherwise
+        // it's the argument separator for something like IF(x, 3, 0), and
+        // must be left for the tokenizer's own comma case to pick up next.
+        if (/[0-9.]/.test(ch) || (ch === "," && /[0-9]/.test(expr[j + 1] ?? ""))) {
+          s += ch;
+          j++;
+        } else break;
       }
       const n = parseFloat(s.replace(",", "."));
       if (!Number.isFinite(n)) throw new Error("invalid number");
@@ -117,7 +183,34 @@ class Parser {
     return t;
   }
 
+  // Comparisons bind loosest, so `{A} > {B} + 1` compares against the whole
+  // sum, and function arguments (which also call parseExpr) can use them —
+  // e.g. IF({Stunden} > 8, ..., ...).
   private parseExpr(): number {
+    const v = this.parseAdditive();
+    const t = this.peek();
+    if (t?.type === "cmp") {
+      this.next();
+      const rhs = this.parseAdditive();
+      switch (t.value) {
+        case "=":
+          return v === rhs ? 1 : 0;
+        case "<>":
+          return v !== rhs ? 1 : 0;
+        case "<":
+          return v < rhs ? 1 : 0;
+        case "<=":
+          return v <= rhs ? 1 : 0;
+        case ">":
+          return v > rhs ? 1 : 0;
+        case ">=":
+          return v >= rhs ? 1 : 0;
+      }
+    }
+    return v;
+  }
+
+  private parseAdditive(): number {
     let v = this.parseTerm();
     for (;;) {
       const t = this.peek();
@@ -264,4 +357,71 @@ export function evaluateFormulas(fields: TemplateField[], values: FillValues): F
     out[f.id] = n === null || n === undefined ? "#FEHLER" : formatResult(n);
   }
   return out;
+}
+
+/**
+ * Evaluates one formula for a live preview in the editor, against sample or
+ * currently-entered values. Other formula fields resolve through their own
+ * formula too (so previewing a chained formula matches what it will show
+ * once saved), but unlike `evaluateFormulas` — used at actual fill/export
+ * time, where a broken formula must degrade quietly to "#FEHLER" — this
+ * surfaces the parser's actual error message so the person building the
+ * template can see *why* a formula doesn't work while still typing it.
+ */
+export function previewFormula(
+  formula: string,
+  fields: TemplateField[],
+  values: FillValues,
+  selfId: string
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (!formula.trim()) return { ok: true, value: "" };
+
+  const byId = new Map(fields.map((f) => [f.id, f] as const));
+  const labelToId = new Map<string, string>();
+  for (const f of fields) {
+    const key = normalizeLabel(f.label);
+    if (key && !labelToId.has(key)) labelToId.set(key, f.id);
+  }
+
+  const resolved = new Map<string, number>();
+  const resolving = new Set<string>();
+
+  function resolve(id: string): number {
+    if (id === selfId) throw new Error("Zirkelbezug: Formel verweist (indirekt) auf sich selbst.");
+    if (resolved.has(id)) return resolved.get(id)!;
+    const f = byId.get(id);
+    if (!f) return 0;
+    if (!f.formula?.trim()) {
+      const n = numFromValue(values[id]);
+      resolved.set(id, n);
+      return n;
+    }
+    if (resolving.has(id)) {
+      throw new Error(`Zirkelbezug über "${f.label || id}".`);
+    }
+    resolving.add(id);
+    let n: number;
+    try {
+      n = evaluateExpression(f.formula, (label) => {
+        const refId = labelToId.get(normalizeLabel(label));
+        return refId ? resolve(refId) : 0;
+      });
+    } finally {
+      resolving.delete(id);
+    }
+    resolved.set(id, n);
+    return n;
+  }
+
+  try {
+    const n = evaluateExpression(formula, (label) => {
+      const refId = labelToId.get(normalizeLabel(label));
+      if (!refId) throw new Error(`Unbekanntes Feld: "${label}"`);
+      return resolve(refId);
+    });
+    if (!Number.isFinite(n)) return { ok: false, error: "Ergebnis ist ungültig (unendlich oder NaN)." };
+    return { ok: true, value: formatResult(n) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "Ungültige Formel." };
+  }
 }

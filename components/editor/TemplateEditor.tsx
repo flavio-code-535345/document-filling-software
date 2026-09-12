@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FieldKind, PageRotation, StoredTemplate, TemplateField, TextAlign } from "@/lib/types";
@@ -31,7 +31,7 @@ const TOOLS: { kind: FieldKind; label: string; icon: string }[] = [
   { kind: "matrix", label: "Matrix", icon: "▦" },
 ];
 
-export type ToolId = FieldKind | "ai-region";
+export type ToolId = FieldKind | "ai-region" | "zoom-area";
 
 export interface PageRegion {
   x: number;
@@ -54,12 +54,18 @@ function roundZoom(z: number): number {
 const ZOOM_IN_FACTOR = 1.25;
 const ZOOM_OUT_FACTOR = 1 / ZOOM_IN_FACTOR;
 const ZOOM_WHEEL_FACTOR = 1.1;
+const AREA_ZOOM_CLICK_FACTOR = 1.6;
+// Leaves a little breathing room around a dragged zoom rectangle instead of
+// jamming it against the viewport edges.
+const AREA_ZOOM_RECT_MARGIN = 0.92;
 
 export default function TemplateEditor({ template }: { template: StoredTemplate }) {
   const router = useRouter();
   const templateRef = useRef(template);
   const stageRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(1);
+  const [stageHeight, setStageHeight] = useState(480);
 
   const [fields, setFields] = useState<TemplateField[]>(template.fields);
   const [pageCount, setPageCount] = useState(template.pageCount);
@@ -97,6 +103,86 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     zoomRef.current = zoom;
   }, [zoom]);
 
+  // The stage has no CSS height of its own — it's a normal-flow block, so
+  // without this its clientHeight would just be whatever height its content
+  // (the PDF page) currently renders at, making it useless as a "visible
+  // area" for fitting/zoom math (fitPage would compute against its own
+  // output and barely move). Bind it to the actual remaining viewport space
+  // below the sticky toolbar instead, kept in sync via resize + a
+  // ResizeObserver on the toolbar (which wraps to more lines on narrow
+  // windows and changes height as tools are toggled).
+  const recalcStageHeight = useCallback(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const top = el.getBoundingClientRect().top;
+    const next = Math.max(320, Math.round(window.innerHeight - top - 16));
+    // Apply directly to the DOM too, not just via React state: fitPage() (on
+    // first mount, below) reads el.clientHeight synchronously right after
+    // this runs, before React has a chance to re-render with the new state.
+    el.style.height = `${next}px`;
+    setStageHeight(next);
+  }, []);
+
+  useEffect(() => {
+    recalcStageHeight();
+    window.addEventListener("resize", recalcStageHeight);
+    const ro = new ResizeObserver(recalcStageHeight);
+    if (toolbarRef.current) ro.observe(toolbarRef.current);
+    return () => {
+      window.removeEventListener("resize", recalcStageHeight);
+      ro.disconnect();
+    };
+  }, [recalcStageHeight]);
+
+  // Zoom changes need to re-anchor the stage's scroll position on whatever
+  // stayed visually fixed (a cursor point, or a dragged rectangle's center).
+  // That math has to run AFTER the DOM has actually resized to the new zoom
+  // — writing scrollLeft/Top synchronously right after setZoom() would still
+  // see the OLD (pre-zoom) scrollable size and get silently clamped into it,
+  // landing at the wrong spot once the bigger content actually appears. So
+  // the anchor is only computed and staged here (in whatever units are
+  // valid right now); a layoutEffect below (keyed on zoom) applies it once
+  // the resize has committed.
+  const pendingScrollRef = useRef<{
+    contentX: number;
+    contentY: number;
+    ratio: number;
+    anchorX: number;
+    anchorY: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRef.current;
+    if (!pending) return;
+    pendingScrollRef.current = null;
+    const el = stageRef.current;
+    if (!el) return;
+    el.scrollLeft = pending.contentX * pending.ratio - pending.anchorX;
+    el.scrollTop = pending.contentY * pending.ratio - pending.anchorY;
+  }, [zoom]);
+
+  // Zooms while keeping the given screen point (viewport client coordinates)
+  // fixed in place — shared by Ctrl/Cmd+scrollwheel zoom and the click-to-
+  // zoom tool below.
+  const zoomAtClientPoint = useCallback((clientX: number, clientY: number, factor: number) => {
+    const el = stageRef.current;
+    if (!el) return;
+    const next = clampZoom(zoomRef.current * factor);
+    if (next === zoomRef.current) return;
+    const ratio = next / zoomRef.current;
+    const rect = el.getBoundingClientRect();
+    const cx = clientX - rect.left;
+    const cy = clientY - rect.top;
+    pendingScrollRef.current = {
+      contentX: el.scrollLeft + cx,
+      contentY: el.scrollTop + cy,
+      ratio,
+      anchorX: cx,
+      anchorY: cy,
+    };
+    setZoom(roundZoom(next));
+  }, []);
+
   // Ctrl/Cmd + scrollwheel zoom, anchored at the cursor (native listener:
   // React wheel handlers are passive and cannot preventDefault).
   useEffect(() => {
@@ -106,18 +192,42 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? ZOOM_WHEEL_FACTOR : 1 / ZOOM_WHEEL_FACTOR;
-      const next = clampZoom(zoomRef.current * factor);
-      if (next === zoomRef.current) return;
-      const ratio = next / zoomRef.current;
-      const rect = el.getBoundingClientRect();
-      const cx = e.clientX - rect.left;
-      const cy = e.clientY - rect.top;
-      el.scrollLeft = (el.scrollLeft + cx) * ratio - cx;
-      el.scrollTop = (el.scrollTop + cy) * ratio - cy;
-      setZoom(roundZoom(next));
+      zoomAtClientPoint(e.clientX, e.clientY, factor);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
+  }, [zoomAtClientPoint]);
+
+  // Click-to-zoom tool: a plain click zooms in centered on that point; a
+  // drag zooms to fit the dragged rectangle into the visible stage.
+  const onZoomClick = useCallback(
+    (clientX: number, clientY: number) => {
+      zoomAtClientPoint(clientX, clientY, AREA_ZOOM_CLICK_FACTOR);
+    },
+    [zoomAtClientPoint]
+  );
+
+  const onZoomToRect = useCallback((left: number, top: number, width: number, height: number) => {
+    const el = stageRef.current;
+    if (!el || width < 2 || height < 2) return;
+    const availW = el.clientWidth;
+    const availH = el.clientHeight;
+    const scale = Math.min(availW / width, availH / height) * AREA_ZOOM_RECT_MARGIN;
+    const next = clampZoom(zoomRef.current * scale);
+    if (next === zoomRef.current) return;
+    const ratio = next / zoomRef.current;
+    const rect = el.getBoundingClientRect();
+    // Center the dragged rectangle in the viewport at the new zoom: its
+    // content-space position (scroll offset + screen offset) scales by the
+    // same ratio as the zoom change, then gets re-centered.
+    pendingScrollRef.current = {
+      contentX: el.scrollLeft + (left + width / 2 - rect.left),
+      contentY: el.scrollTop + (top + height / 2 - rect.top),
+      ratio,
+      anchorX: availW / 2,
+      anchorY: availH / 2,
+    };
+    setZoom(roundZoom(next));
   }, []);
 
   // Fit the current page (width AND height) into the visible stage.
@@ -256,7 +366,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   // ---- stamping ----
   const handlePageClick = useCallback(
     (pt: { x: number; y: number }) => {
-      if (!activeTool || activeTool === "ai-region") return;
+      if (!activeTool || activeTool === "ai-region" || activeTool === "zoom-area") return;
       if (activeTool === "matrix") {
         if (pendingMatrix) {
           // second click: bottom-right cell center → pitch
@@ -519,7 +629,11 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   return (
     <div>
       {/* Sticky toolbar BELOW the app navbar (top-16) */}
-      <div className="sticky top-16 z-30 -mx-4 mb-4 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur">
+      <div
+        ref={toolbarRef}
+        className="sticky top-16 z-30 -mx-4 mb-4 border-b border-line bg-canvas/95 px-4 py-2 backdrop-blur"
+      >
+
         <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
           <ToolGroup label="Vorlage">
             <Link
@@ -608,6 +722,16 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               <GroupButton title="Seite in den sichtbaren Bereich einpassen" onClick={fitPage}>
                 ⤢ Fit
               </GroupButton>
+              <GroupButton
+                active={activeTool === "zoom-area"}
+                title="Klicken zum Hineinzoomen, oder einen Bereich aufziehen, um genau diesen einzupassen"
+                onClick={() => {
+                  setActiveTool(activeTool === "zoom-area" ? null : "zoom-area");
+                  setPendingMatrix(null);
+                }}
+              >
+                🔍+ Zoom
+              </GroupButton>
             </div>
           </ToolGroup>
 
@@ -673,14 +797,33 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         <div className="min-w-0">
           <div
             ref={stageRef}
-            className="flex justify-center overflow-auto rounded-xl border border-line bg-surface-2/50 p-6"
+            style={{ height: stageHeight }}
+            className="flex overflow-auto rounded-xl border border-line bg-surface-2/50 p-6"
           >
-            {pendingMatrix && (
-              <p className="mb-2 rounded-lg border border-accent bg-accent/10 px-3 py-1 text-sm">
-                Zweiten Klick setzen: unterste rechte Zelle (Ursprung + Rastermaß)
-              </p>
-            )}
-            <PdfPageView
+            {/* Stacked above the page (not beside it, in the same flex row)
+                so a hint appearing/disappearing never shifts the page sideways.
+                shrink-0: being a flex container itself, this would otherwise get
+                flex-shrunk by the outer row and compress the page instead of
+                overflowing into scroll at high zoom. mx-auto (not the stage's
+                own justify-center) does the horizontal centering when the page
+                is narrower than the stage — justify-content:center on a scroll
+                container is a well-known trap: once content overflows, Chrome/
+                Firefox only let you scroll into the "end" half of the overflow
+                and clamp scrollWidth short of the actual content size, which
+                silently broke the zoom tool's ability to scroll to an
+                off-center point at high zoom. */}
+            <div className="mx-auto flex shrink-0 flex-col items-center">
+              {pendingMatrix && (
+                <p className="mb-2 rounded-lg border border-accent bg-accent/10 px-3 py-1 text-sm">
+                  Zweiten Klick setzen: unterste rechte Zelle (Ursprung + Rastermaß)
+                </p>
+              )}
+              {activeTool === "zoom-area" && (
+                <p className="mb-2 rounded-lg border border-sky-400 bg-sky-400/10 px-3 py-1 text-sm">
+                  🔍+ Klicken zum Hineinzoomen, oder einen Bereich aufziehen, um ihn einzupassen
+                </p>
+              )}
+              <PdfPageView
               pdfUrl={pdfUrl}
               pageIndex={pageIndex}
               pageSize={pageSize}
@@ -714,11 +857,14 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               }}
               onCancelTool={cancelTool}
               onRegionSelected={(region) => void aiScan(region)}
+              onZoomClick={onZoomClick}
+              onZoomToRect={onZoomToRect}
               onCellClick={(fieldId, row, col) => {
                 setFeinCell({ row, col });
                 setFeintuning(fieldId);
               }}
-            />
+              />
+            </div>
           </div>
 
           {/* Pager */}
@@ -775,6 +921,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         allFields={fields}
         pageCount={pageCount}
         zoom={zoom}
+        previewValues={sampleValues}
         feintuningActive={feintuning === selected?.id}
         feinCell={feinCell}
         onCellReset={() => setFeinCell(null)}
