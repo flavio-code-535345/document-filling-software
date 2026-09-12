@@ -46,6 +46,8 @@ export default function PdfPageView({
   onCopyField,
   onCancelTool,
   onRegionSelected,
+  onZoomClick,
+  onZoomToRect,
   onCellClick,
 }: {
   pdfUrl: string;
@@ -71,12 +73,21 @@ export default function PdfPageView({
   onCopyField: (id: string) => void;
   onCancelTool: () => void;
   onRegionSelected: (region: PageRegion) => void;
+  onZoomClick?: (clientX: number, clientY: number) => void;
+  onZoomToRect?: (left: number, top: number, width: number, height: number) => void;
   onCellClick?: (fieldId: string, row: number, col: number) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const regionStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Raw screen coordinates for the zoom-area tool — kept separate from the
+  // pt-space regionRect (which drives the on-screen rectangle preview and
+  // which the AI-region tool already uses) because zooming is anchored to
+  // real viewport pixels, not document coordinates.
+  const zoomDragRef = useRef<{ startX: number; startY: number; curX: number; curY: number } | null>(
+    null
+  );
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [regionRect, setRegionRect] = useState<{
     x: number;
@@ -114,6 +125,12 @@ export default function PdfPageView({
         const prepared = await preparePageRender(pdfUrl, pageIndex, canvas, widthPx);
         if (cancelled) {
           prepared.task.cancel();
+          // cancel() rejects the task's own promise (RenderingCancelledException);
+          // nothing else here awaits it, so without this it surfaces as an
+          // unhandled rejection every time a render is superseded before it
+          // even starts (e.g. the zoom changing twice in quick succession,
+          // as happens on mount when "fit to screen" kicks in right after).
+          prepared.task.promise.catch(() => {});
           return;
         }
         currentTask = prepared.task;
@@ -165,6 +182,19 @@ export default function PdfPageView({
       return;
     }
 
+    // Zoom-area tool: a plain click zooms in on that point; a drag zooms to
+    // fit the dragged rectangle. Tracked in raw screen coordinates (see
+    // zoomDragRef) alongside the same pt-space rectangle used for the visual
+    // preview.
+    if (activeTool === "zoom-area") {
+      regionStartRef.current = pt;
+      zoomDragRef.current = { startX: e.clientX, startY: e.clientY, curX: e.clientX, curY: e.clientY };
+      setRegionRect({ x: pt.x, y: pt.y, width: 0, height: 0 });
+      e.preventDefault();
+      containerRef.current?.setPointerCapture(e.pointerId);
+      return;
+    }
+
     const target = e.target as HTMLElement;
     const handle = target.dataset.handle;
     const fieldEl = target.closest<HTMLElement>("[data-field-id]");
@@ -204,7 +234,7 @@ export default function PdfPageView({
       setCursor(toPt(e));
     }
 
-    if (activeTool === "ai-region" && regionStartRef.current) {
+    if ((activeTool === "ai-region" || activeTool === "zoom-area") && regionStartRef.current) {
       const pt = toPt(e);
       const start = regionStartRef.current;
       setRegionRect({
@@ -213,6 +243,10 @@ export default function PdfPageView({
         width: Math.abs(pt.x - start.x),
         height: Math.abs(pt.y - start.y),
       });
+      if (zoomDragRef.current) {
+        zoomDragRef.current.curX = e.clientX;
+        zoomDragRef.current.curY = e.clientY;
+      }
       return;
     }
 
@@ -278,6 +312,28 @@ export default function PdfPageView({
       }
       regionStartRef.current = null;
       setRegionRect(null);
+      return;
+    }
+
+    // Finish a zoom-area click/drag.
+    if (activeTool === "zoom-area" && regionStartRef.current) {
+      const zoomDrag = zoomDragRef.current;
+      regionStartRef.current = null;
+      zoomDragRef.current = null;
+      setRegionRect(null);
+      if (!zoomDrag) return;
+      const dx = Math.abs(zoomDrag.curX - zoomDrag.startX);
+      const dy = Math.abs(zoomDrag.curY - zoomDrag.startY);
+      if (dx < 6 && dy < 6) {
+        onZoomClick?.(zoomDrag.curX, zoomDrag.curY);
+      } else {
+        onZoomToRect?.(
+          Math.min(zoomDrag.startX, zoomDrag.curX),
+          Math.min(zoomDrag.startY, zoomDrag.curY),
+          dx,
+          dy
+        );
+      }
       return;
     }
 
@@ -524,6 +580,19 @@ export default function PdfPageView({
             />
           )}
 
+          {/* Zoom-area drag rectangle */}
+          {regionRect && activeTool === "zoom-area" && (
+            <div
+              className="pointer-events-none absolute z-30 border-2 border-dashed border-sky-400 bg-sky-400/10"
+              style={{
+                left: regionRect.x * zoom,
+                top: regionRect.y * zoom,
+                width: regionRect.width * zoom,
+                height: regionRect.height * zoom,
+              }}
+            />
+          )}
+
           {/* Marquee selection rectangle */}
           {marqueeRect && (
             <div
@@ -538,12 +607,20 @@ export default function PdfPageView({
           )}
 
           {/* Stamp cursor chip */}
-          {activeTool && activeTool !== "ai-region" && cursor && (
+          {activeTool && activeTool !== "ai-region" && activeTool !== "zoom-area" && cursor && (
             <div
               className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-accent-strong px-2 py-0.5 text-xs font-semibold text-white"
               style={{ left: cursor.x * zoom, top: cursor.y * zoom }}
             >
               + {activeTool}
+            </div>
+          )}
+          {activeTool === "zoom-area" && cursor && (
+            <div
+              className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-500 px-2 py-0.5 text-xs font-semibold text-white"
+              style={{ left: cursor.x * zoom, top: cursor.y * zoom }}
+            >
+              🔍+
             </div>
           )}
         </div>

@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   FieldKind,
+  FillValues,
   FontFamily,
   FontStyle,
   FontWeight,
@@ -11,8 +12,39 @@ import type {
   TextAlign,
   VerticalAlign,
 } from "@/lib/types";
+import { previewFormula } from "@/lib/formula";
 
 const KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature", "matrix"];
+
+/** Quick-insert chips for the formula editor: label shown, snippet inserted,
+ * and where the caret lands inside it (so e.g. "IF(,,)" leaves you ready to
+ * type the condition rather than after the closing paren). */
+const FORMULA_FUNCTIONS: { label: string; snippet: string; caret: number; hint: string }[] = [
+  { label: "SUM()", snippet: "SUM()", caret: 4, hint: "Summe mehrerer Werte: SUM({A},{B},{C})" },
+  { label: "AVG()", snippet: "AVG()", caret: 4, hint: "Mittelwert: AVG({A},{B},{C})" },
+  { label: "MIN()", snippet: "MIN()", caret: 4, hint: "Kleinster Wert: MIN({A},{B})" },
+  { label: "MAX()", snippet: "MAX()", caret: 4, hint: "Größter Wert: MAX({A},{B})" },
+  { label: "ABS()", snippet: "ABS()", caret: 4, hint: "Absolutwert (ohne Vorzeichen)" },
+  { label: "ROUND(,0)", snippet: "ROUND(,0)", caret: 6, hint: "Runden: ROUND(Wert, Nachkommastellen)" },
+  { label: "ROUNDUP(,0)", snippet: "ROUNDUP(,0)", caret: 8, hint: "Aufrunden: ROUNDUP(Wert, Nachkommastellen)" },
+  { label: "ROUNDDOWN(,0)", snippet: "ROUNDDOWN(,0)", caret: 10, hint: "Abrunden: ROUNDDOWN(Wert, Nachkommastellen)" },
+  { label: "CEIL()", snippet: "CEIL()", caret: 5, hint: "Aufrunden auf ganze Zahl" },
+  { label: "FLOOR()", snippet: "FLOOR()", caret: 6, hint: "Abrunden auf ganze Zahl" },
+  // IF/AND/OR/MOD show their full arg list in the label for documentation,
+  // but insert just the empty call (like SUM() above) rather than
+  // pre-filled placeholder commas: with several genuinely-empty slots to
+  // fill, landing the caret before a placeholder "," is a trap — the next
+  // chip or field you insert lands before that comma too, silently merging
+  // into the wrong argument. Typing every comma yourself (same as SUM's
+  // "{A},{B}") is one consistent, unsurprising motion instead.
+  { label: "MOD(,)", snippet: "MOD()", caret: 4, hint: "Rest der Division: MOD(Zahl, Divisor)" },
+  { label: "IF(,,)", snippet: "IF()", caret: 3, hint: "Bedingung: IF(Bedingung, Dann, Sonst) — z. B. IF({Stunden}>8, {Stunden}-8, 0)" },
+  { label: "AND(,)", snippet: "AND()", caret: 4, hint: "Wahr, wenn alle Bedingungen erfüllt sind" },
+  { label: "OR(,)", snippet: "OR()", caret: 3, hint: "Wahr, wenn mindestens eine Bedingung erfüllt ist" },
+  { label: "NOT()", snippet: "NOT()", caret: 4, hint: "Kehrt eine Bedingung um" },
+];
+
+const FORMULA_OPERATORS = ["+", "-", "*", "/", "%", "(", ")", "=", "<>", "<", "<=", ">", ">="];
 
 /** Ensure a value is a valid "#RRGGBB" string for the color input. */
 function normalizeHex(value: string | undefined): string {
@@ -28,6 +60,7 @@ export default function Inspector({
   allFields,
   pageCount,
   zoom,
+  previewValues,
   feintuningActive,
   feinCell,
   onCellReset,
@@ -40,6 +73,7 @@ export default function Inspector({
   allFields: TemplateField[];
   pageCount: number;
   zoom: number;
+  previewValues: FillValues;
   feintuningActive: boolean;
   feinCell: { row: number; col: number } | null;
   onCellReset: () => void;
@@ -51,6 +85,8 @@ export default function Inspector({
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; base: { x: number; y: number } } | null>(null);
   const posTagRef = useRef<string | null>(null);
+  const formulaRef = useRef<HTMLTextAreaElement>(null);
+  const pendingCaretRef = useRef<number | null>(null);
 
   // Initialize position from the selected field's screen rect (once per field).
   useEffect(() => {
@@ -68,11 +104,42 @@ export default function Inspector({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [field?.id]);
 
+  // Restore the caret after a chip/dropdown inserts a snippet into the
+  // formula (the textarea's value only updates once the patch round-trips
+  // back down as a prop, so the actual setSelectionRange happens here).
+  useEffect(() => {
+    if (pendingCaretRef.current === null || !formulaRef.current) return;
+    const caretPos = pendingCaretRef.current;
+    pendingCaretRef.current = null;
+    formulaRef.current.focus();
+    formulaRef.current.setSelectionRange(caretPos, caretPos);
+  }, [field?.formula]);
+
+  const formulaPreview = useMemo(() => {
+    if (!field || (field.kind !== "text" && field.kind !== "multiline")) return null;
+    return previewFormula(field.formula ?? "", allFields, previewValues, field.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [field?.formula, field?.id, field?.kind, allFields, previewValues]);
+
   const clampPage = (value: number) => Math.min(Math.max(0, value), Math.max(0, pageCount - 1));
 
   if (!field || !pos) return null;
 
   const num = (v: number | undefined, fallback: number) => (v ?? fallback);
+
+  /** Inserts `snippet` at the formula textarea's caret (or the end, if it
+   * isn't focused), and moves the caret to `caretOffset` within it —
+   * e.g. inserting "SUM()" with caretOffset 4 lands the caret between the
+   * parens, ready to type the first argument. */
+  const insertIntoFormula = (snippet: string, caretOffset?: number) => {
+    const el = formulaRef.current;
+    const current = field.formula ?? "";
+    const start = el?.selectionStart ?? current.length;
+    const end = el?.selectionEnd ?? current.length;
+    const next = current.slice(0, start) + snippet + current.slice(end);
+    pendingCaretRef.current = start + (caretOffset ?? snippet.length);
+    onPatch({ formula: next });
+  };
 
   const onHeaderDown = (e: React.PointerEvent) => {
     e.preventDefault();
@@ -314,7 +381,7 @@ export default function Inspector({
           </div>
         )}
 
-        {field.kind === "text" && (
+        {(field.kind === "text" || field.kind === "multiline") && (
           <div className="space-y-2 border-t border-line pt-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold">Formel (optional)</h4>
@@ -328,19 +395,22 @@ export default function Inspector({
               )}
             </div>
             <textarea
-              rows={2}
+              ref={formulaRef}
+              rows={3}
               className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 font-mono text-xs"
               placeholder="z. B. {Stunden Montag} + {Stunden Dienstag}"
               value={field.formula ?? ""}
               onChange={(e) => onPatch({ formula: e.target.value || undefined })}
             />
+
             {allFields.filter((f) => f.id !== field.id && f.label).length > 0 && (
               <select
                 className="w-full rounded-lg border border-line bg-canvas px-2 py-1.5 text-xs text-ink-dim"
                 value=""
                 onChange={(e) => {
                   if (!e.target.value) return;
-                  onPatch({ formula: `${field.formula ?? ""}{${e.target.value}}` });
+                  insertIntoFormula(`{${e.target.value}}`);
+                  e.target.value = "";
                 }}
               >
                 <option value="">+ Feld einfügen…</option>
@@ -353,11 +423,75 @@ export default function Inspector({
                   ))}
               </select>
             )}
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-dim/70">
+                Funktionen
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {FORMULA_FUNCTIONS.map((fn) => (
+                  <button
+                    key={fn.label}
+                    type="button"
+                    title={fn.hint}
+                    className="rounded border border-line px-1.5 py-0.5 font-mono text-[11px] hover:border-accent hover:bg-surface-2"
+                    onClick={() => insertIntoFormula(fn.snippet, fn.caret)}
+                  >
+                    {fn.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-dim/70">
+                Operatoren
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {FORMULA_OPERATORS.map((op) => (
+                  <button
+                    key={op}
+                    type="button"
+                    className="rounded border border-line px-2 py-0.5 font-mono text-[11px] hover:border-accent hover:bg-surface-2"
+                    onClick={() => insertIntoFormula(op)}
+                  >
+                    {op}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {formulaPreview && field.formula?.trim() && (
+              <div
+                className={`rounded-lg border px-2 py-1.5 text-xs ${
+                  formulaPreview.ok
+                    ? "border-line bg-surface-2/50 text-ink-dim"
+                    : "border-red-400/40 bg-red-400/10 text-red-400"
+                }`}
+              >
+                {formulaPreview.ok ? (
+                  <>
+                    Vorschau (Musterwerte):{" "}
+                    <strong className="text-ink">{formulaPreview.value || "0"}</strong>
+                  </>
+                ) : (
+                  <>⚠ {formulaPreview.error}</>
+                )}
+              </div>
+            )}
+
             <p className="text-[11px] leading-snug text-ink-dim">
               Verweist per <code className="rounded bg-surface-2 px-1">{"{Bezeichnung}"}</code> auf
-              andere Felder. Operatoren <code className="rounded bg-surface-2 px-1">+ − * / ( )</code>,
-              Funktionen SUM, MIN, MAX, AVG, ABS, ROUND. Wird beim Ausfüllen automatisch berechnet
-              (schreibgeschützt) — Formeln können auch aufeinander verweisen.
+              andere Felder — auch auf andere Formelfelder (Verkettung). Wird beim Ausfüllen
+              automatisch berechnet (schreibgeschützt).
+            </p>
+            <p className="text-[11px] leading-snug text-ink-dim">
+              Bei mehreren Zahlen direkt hintereinander ein Leerzeichen nach dem Komma setzen oder{" "}
+              <code className="rounded bg-surface-2 px-1">;</code> statt{" "}
+              <code className="rounded bg-surface-2 px-1">,</code> verwenden — z. B.{" "}
+              <code className="rounded bg-surface-2 px-1">MOD(10, 3)</code>, nicht{" "}
+              <code className="rounded bg-surface-2 px-1">MOD(10,3)</code>, da{" "}
+              <code className="rounded bg-surface-2 px-1">10,3</code> sonst als Dezimalzahl gilt.
             </p>
           </div>
         )}
