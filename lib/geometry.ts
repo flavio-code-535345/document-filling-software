@@ -101,6 +101,48 @@ export function multilineFirstBaseline(
   }
 }
 
+/** Splits a field's box into `count` equal-width sub-boxes, left to right —
+ * e.g. a two-digit KW field printed as two separate squares. */
+export function digitBoxRects(
+  field: TemplateField,
+  count: number
+): { x: number; y: number; width: number; height: number }[] {
+  const n = Math.max(1, Math.floor(count));
+  const boxWidth = field.width / n;
+  return Array.from({ length: n }, (_, i) => ({
+    x: field.x + i * boxWidth,
+    y: field.y,
+    width: boxWidth,
+    height: field.height,
+  }));
+}
+
+/**
+ * A single font size for every digit box, shrunk (unless overflow is
+ * "visible") so each occupied box's own character fits its own box width —
+ * boxes are typically much narrower than the full field, so this is
+ * computed against `boxWidth`, not `field.width` like `fitSingleLine`.
+ */
+export function fitDigitBoxFont(
+  field: TemplateField,
+  chars: string[],
+  boxWidth: number,
+  measure: MeasureFn,
+  overflow: OverflowMode = "shrink"
+): number {
+  if (overflow === "visible") return field.fontSize;
+  let fontSize = field.fontSize;
+  for (const ch of chars) {
+    if (!ch) continue;
+    const w = measure(ch, fontSize);
+    if (w > boxWidth) {
+      const ratio = boxWidth / w;
+      fontSize = Math.min(fontSize, Math.max(MIN_FONT_SIZE, Math.floor(fontSize * ratio * 100) / 100));
+    }
+  }
+  return fontSize;
+}
+
 export function matrixCellCenter(
   field: TemplateField,
   row: number,

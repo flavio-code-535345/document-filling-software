@@ -5,6 +5,8 @@
 import { cssFontFamily, measureText, wrapClient } from "@/lib/pdf/client";
 import {
   baselineFromTop,
+  digitBoxRects,
+  fitDigitBoxFont,
   fitMultiline,
   fitSingleLine,
   formatGermanDate,
@@ -70,11 +72,62 @@ function renderField(
   value: string | boolean | Record<string, boolean> | undefined
 ): React.ReactNode {
   switch (field.kind) {
-    case "text":
+    case "text": {
+      const raw = typeof value === "string" && value.trim() ? value : "";
+      if (!raw) return null;
+      const measure = (s: string, sz: number) =>
+        measureText(s, sz, field.fontFamily, field.fontWeight, field.fontStyle);
+
+      if (field.digitBoxes && field.digitBoxes > 1) {
+        const rects = digitBoxRects(field, field.digitBoxes);
+        const chars = raw.slice(0, rects.length).split("");
+        const boxWidth = rects[0]?.width ?? field.width;
+        const size = fitDigitBoxFont(field, chars, boxWidth, measure, field.overflow);
+        const y = field.y + baselineFromTop(field, size, field.valign);
+        return (
+          <>
+            {chars.map((ch, i) => {
+              const rect = rects[i];
+              const width = measure(ch, size);
+              return (
+                <text
+                  key={i}
+                  x={rect.x + (rect.width - width) / 2}
+                  y={y}
+                  fontSize={size}
+                  fontFamily={cssFontFamily(field.fontFamily)}
+                  fontWeight={field.fontWeight === "bold" ? "bold" : undefined}
+                  fontStyle={field.fontStyle === "italic" ? "italic" : undefined}
+                  fill={field.textColor ?? "#000000"}
+                >
+                  {ch}
+                </text>
+              );
+            })}
+          </>
+        );
+      }
+
+      const size = fitSingleLine(field, raw, measure, field.overflow);
+      const width = measure(raw, size);
+      return (
+        <text
+          x={textAlignX(field, width, field.align)}
+          y={field.y + baselineFromTop(field, size, field.valign)}
+          fontSize={size}
+          fontFamily={cssFontFamily(field.fontFamily)}
+          fontWeight={field.fontWeight === "bold" ? "bold" : undefined}
+          fontStyle={field.fontStyle === "italic" ? "italic" : undefined}
+          fill={field.textColor ?? "#000000"}
+        >
+          {raw}
+        </text>
+      );
+    }
     case "date": {
       const raw = typeof value === "string" && value.trim() ? value : "";
       if (!raw) return null;
-      const text = field.kind === "date" ? formatGermanDate(raw) : raw;
+      const text = formatGermanDate(raw);
       const measure = (s: string, sz: number) =>
         measureText(s, sz, field.fontFamily, field.fontWeight, field.fontStyle);
       const size = fitSingleLine(field, text, measure, field.overflow);

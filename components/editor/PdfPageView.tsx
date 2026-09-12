@@ -444,6 +444,22 @@ export default function PdfPageView({
                     boxShadow: linkColor ? `0 0 0 3px ${linkColor}` : "none",
                   }}
                 />
+                {f.kind === "text" && (f.digitBoxes ?? 0) > 1 && (
+                  <div className="pointer-events-none absolute inset-0">
+                    {Array.from({ length: f.digitBoxes! - 1 }, (_, i) => (
+                      <div
+                        key={i}
+                        className="absolute inset-y-0"
+                        style={{
+                          left: `${((i + 1) / f.digitBoxes!) * 100}%`,
+                          width: 1,
+                          background: KIND_COLORS[f.kind],
+                          opacity: 0.6,
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
                 <span
                   className="pointer-events-none absolute"
                   style={{
