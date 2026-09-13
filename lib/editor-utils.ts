@@ -32,6 +32,42 @@ export const KIND_LABELS: Record<FieldKind, string> = {
   matrix: "Matrix",
 };
 
+/**
+ * Repeats an entire page set `times` additional times — e.g. a 2-page
+ * duplex sheet with times=3 becomes 8 pages. Copied fields keep their
+ * page-rank-based day/column labels working unmodified (KW/date
+ * auto-numbering in FillForm.tsx is purely page-rank based) but get a
+ * "(2)", "(3)", … suffix per block via `uniqueCopyLabel` unless they already
+ * carry a `linkKey` (e.g. Name/Vorname), which is preserved as-is so those
+ * stay one shared input across every block.
+ *
+ * IDs are derived deterministically (`${originalId}::rep${block}`) rather
+ * than random — this is what lets the temporary, per-export "how many
+ * weeks" choice on the fill page work at all: the browser expands the
+ * field list to build its own form state (values keyed by these ids), and
+ * later the server *independently* expands the same original fields with
+ * the same `times` to know what to fill — since neither side sends the
+ * other its expanded field list, the ids have to line up on their own.
+ * (The persisted "Endlos-Modus" editor route reuses this too, where the
+ * determinism doesn't matter but the one shared implementation does.)
+ */
+export function expandFieldsForRepeat(
+  fields: TemplateField[],
+  originalPageCount: number,
+  times: number
+): TemplateField[] {
+  if (times <= 0) return fields;
+  const out: TemplateField[] = [...fields];
+  for (let b = 1; b <= times; b++) {
+    for (const f of fields) {
+      const copy: TemplateField = { ...f, id: `${f.id}::rep${b}`, page: f.page + b * originalPageCount };
+      if (!copy.linkKey) copy.label = uniqueCopyLabel(f.label, out);
+      out.push(copy);
+    }
+  }
+  return out;
+}
+
 export function isUniqueLabel(label: string, fields: TemplateField[], excludeId: string): boolean {
   return !fields.some((f) => f.id !== excludeId && f.label === label);
 }

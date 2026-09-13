@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import { evaluateFormulas } from "@/lib/formula";
+import { expandFieldsForRepeat } from "@/lib/editor-utils";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
@@ -295,15 +296,29 @@ export default function FillForm({
   emailAvailable,
   emailTarget,
   hasDefaultSignature,
-  isAdmin,
 }: {
   template: StoredTemplate;
   emailAvailable: boolean;
   emailTarget: string;
   hasDefaultSignature: boolean;
-  isAdmin: boolean;
 }) {
-  const groups = useMemo(() => groupFields(template.fields ?? []), [template.fields]);
+  // "Endlos-Modus", but temporary and per-export rather than a change to the
+  // template itself: 1 = fill the document as stored; each extra block
+  // previews (and, on submit, exports) the entire page set repeated once
+  // more — the same expansion the admin "repeat pages" tool uses, just
+  // computed locally instead of persisted, so nothing here touches the
+  // saved template and setting it back to 1 undoes it instantly.
+  const [weekBlocks, setWeekBlocks] = useState(1);
+  const effectiveFields = useMemo(
+    () =>
+      weekBlocks > 1
+        ? expandFieldsForRepeat(template.fields ?? [], template.pageCount, weekBlocks - 1)
+        : template.fields ?? [],
+    [template.fields, template.pageCount, weekBlocks]
+  );
+  const effectivePageCount = template.pageCount * weekBlocks;
+
+  const groups = useMemo(() => groupFields(effectiveFields), [effectiveFields]);
   const dateGroups = useMemo(
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
@@ -361,62 +376,13 @@ export default function FillForm({
   };
 
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
-    ...defaultStaticValues(template.fields ?? []),
-    ...defaultKwValues(template.fields ?? [], swapWeeks),
+    ...defaultStaticValues(effectiveFields),
+    ...defaultKwValues(effectiveFields, swapWeeks),
     ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
   }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  // ---- Endlos-Modus (admin-only): repeat/trim this template's pages right
-  // from the fill/export screen, since "how many weeks to print" is a
-  // per-occasion export choice, not a template-design one — see the repeat-
-  // pages/trim-pages routes this reuses (originally in the editor toolbar,
-  // moved here on request). A full reload picks up the changed page/field
-  // count cleanly rather than re-deriving all of FillForm's memoized state
-  // by hand.
-  const [repeatTimes, setRepeatTimes] = useState(1);
-  const [repeating, setRepeating] = useState(false);
-  const [keepPages, setKeepPages] = useState(() => Math.max(1, Math.min(2, template.pageCount - 1)));
-  const [trimming, setTrimming] = useState(false);
-  const [endlessError, setEndlessError] = useState<string | null>(null);
-
-  const repeatPages = async () => {
-    setRepeating(true);
-    setEndlessError(null);
-    try {
-      const res = await fetch(`/api/templates/${template.id}/repeat-pages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ times: repeatTimes }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || "Wiederholen fehlgeschlagen.");
-      window.location.reload();
-    } catch (err) {
-      setEndlessError(err instanceof Error ? err.message : "Wiederholen fehlgeschlagen.");
-      setRepeating(false);
-    }
-  };
-
-  const trimPages = async () => {
-    setTrimming(true);
-    setEndlessError(null);
-    try {
-      const res = await fetch(`/api/templates/${template.id}/trim-pages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keepPages }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || "Kürzen fehlgeschlagen.");
-      window.location.reload();
-    } catch (err) {
-      setEndlessError(err instanceof Error ? err.message : "Kürzen fehlgeschlagen.");
-      setTrimming(false);
-    }
-  };
 
   // ---- saved drafts ----
   const [savedFills, setSavedFills] = useState<SavedFill[]>([]);
@@ -464,7 +430,7 @@ export default function FillForm({
               if (!template.autoCurrentWeek) return merged;
               return {
                 ...merged,
-                ...defaultKwValues(template.fields ?? [], swapWeeksRef.current),
+                ...defaultKwValues(effectiveFields, swapWeeksRef.current),
                 ...freshDateValues(dateGroupsByPage, swapWeeksRef.current),
               };
             });
@@ -480,17 +446,18 @@ export default function FillForm({
   }, [template.id]);
 
   // Re-derive the KW boxes (always) and the date fields (only in
-  // Tätigkeitsnachweis-Modus) whenever the week assignment is swapped, so
-  // flipping the toggle is a one-click fix instead of also having to
-  // manually re-apply every Datumsreihe panel.
+  // Tätigkeitsnachweis-Modus) whenever the week assignment is swapped, or
+  // the temporary week-block count changes (a newly-revealed block's KW/date
+  // fields need their own defaults too) — so both are a one-click fix
+  // instead of also having to manually re-apply every Datumsreihe panel.
   useEffect(() => {
     setValues((v) => ({
       ...v,
-      ...defaultKwValues(template.fields ?? [], swapWeeks),
+      ...defaultKwValues(effectiveFields, swapWeeks),
       ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [swapWeeks]);
+  }, [swapWeeks, weekBlocks]);
 
   // Debounced auto-save (upsert the user's single auto-draft for this template).
   useEffect(() => {
@@ -570,14 +537,14 @@ export default function FillForm({
   };
 
   const pageGroups = useMemo(() => {
-    const out: LinkedGroup[][] = Array.from({ length: template.pageCount }, () => []);
+    const out: LinkedGroup[][] = Array.from({ length: effectivePageCount }, () => []);
     for (const g of groups) {
       const page = g.fields[0].page;
-      if (page >= 0 && page < template.pageCount) out[page].push(g);
+      if (page >= 0 && page < effectivePageCount) out[page].push(g);
       else out[0]?.push(g);
     }
     return out;
-  }, [groups, template.pageCount]);
+  }, [groups, effectivePageCount]);
 
   const pageLayouts = useMemo(
     () => pageGroups.map((g) => buildPageLayout(g)),
@@ -593,8 +560,8 @@ export default function FillForm({
   };
 
   const computedValues = useMemo(
-    () => evaluateFormulas(template.fields ?? [], values),
-    [template.fields, values]
+    () => evaluateFormulas(effectiveFields, values),
+    [effectiveFields, values]
   );
 
   const previewValues: PreviewValues = useMemo(
@@ -628,7 +595,7 @@ export default function FillForm({
         const f = g.fields[0];
         return f.required && isEmptyFieldValue(values[f.id]);
       });
-      if (group) jumpPreview(Math.min(group.fields[0].page, template.pageCount - 1));
+      if (group) jumpPreview(Math.min(group.fields[0].page, effectivePageCount - 1));
       return;
     }
     setBusy(true);
@@ -637,7 +604,7 @@ export default function FillForm({
       const res = await fetch("/api/fill", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId: template.id, values, sendEmail }),
+        body: JSON.stringify({ templateId: template.id, values, sendEmail, weekBlocks }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -886,69 +853,31 @@ export default function FillForm({
             </label>
           )}
 
-          {isAdmin && template.pageCount >= 1 && (
-            <section className="rounded-xl border border-dashed border-line bg-surface/50 p-4">
-              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
-                Admin: Endlos-Modus
-              </h2>
-              <p className="mb-3 text-xs text-ink-dim">
-                Ändert die Vorlage selbst (PDF + Felder) — wirkt sich auf jede zukünftige Ausfüllung aus, nicht
-                nur auf diesen Download.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  type="number"
-                  min={1}
-                  max={10}
-                  value={repeatTimes}
-                  onChange={(e) => {
-                    const n = Math.round(Number(e.target.value));
-                    setRepeatTimes(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
-                  }}
-                  className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
-                  title="Wie oft die aktuellen Seiten zusätzlich angehängt werden"
-                />
-                <button
-                  type="button"
-                  disabled={repeating || trimming}
-                  title={`Hängt die aktuellen ${template.pageCount} Seite(n) ${repeatTimes}× erneut an (Ergebnis: ${
-                    template.pageCount * (repeatTimes + 1)
-                  } Seiten). Lädt die Seite danach neu.`}
-                  className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
-                  onClick={() => void repeatPages()}
-                >
-                  {repeating ? "Wiederholt…" : `🔁 ${repeatTimes}× anhängen`}
-                </button>
-                {template.pageCount > 1 && (
-                  <>
-                    <span className="h-5 w-px bg-line" />
-                    <input
-                      type="number"
-                      min={1}
-                      max={template.pageCount - 1}
-                      value={keepPages}
-                      onChange={(e) => {
-                        const n = Math.round(Number(e.target.value));
-                        setKeepPages(Number.isFinite(n) ? Math.min(template.pageCount - 1, Math.max(1, n)) : 1);
-                      }}
-                      className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
-                      title="Auf wie viele Seiten gekürzt werden soll"
-                    />
-                    <button
-                      type="button"
-                      disabled={repeating || trimming}
-                      title={`Entfernt alle Seiten nach Seite ${keepPages} (und deren Felder) dauerhaft. Lädt die Seite danach neu.`}
-                      className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
-                      onClick={() => void trimPages()}
-                    >
-                      {trimming ? "Kürzt…" : `✂️ auf ${keepPages} kürzen`}
-                    </button>
-                  </>
-                )}
-              </div>
-              {endlessError && <p className="mt-2 text-sm text-red-400">{endlessError}</p>}
-            </section>
-          )}
+          <section className="rounded-xl border border-dashed border-line bg-surface/50 p-4">
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-dim">Endlos-Modus</h2>
+            <p className="mb-3 text-xs text-ink-dim">
+              Wiederholt das ganze Dokument nur für diesen Download — die Vorlage selbst bleibt unverändert.
+              Zurück auf 1 macht es sofort rückgängig.
+            </p>
+            <label className="flex items-center gap-2 text-sm">
+              Anzahl Blöcke
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={weekBlocks}
+                onChange={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  setWeekBlocks(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
+                }}
+                className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center focus:border-accent focus:outline-none"
+                title={`${weekBlocks}× das komplette Dokument (${template.pageCount} Seite(n)) = ${effectivePageCount} Seiten in diesem Download`}
+              />
+              <span className="text-xs text-ink-dim">
+                = {effectivePageCount} Seiten in diesem Download
+              </span>
+            </label>
+          </section>
 
           {error && <p className="text-sm text-red-400">{error}</p>}
 
@@ -964,25 +893,31 @@ export default function FillForm({
         {/* Sticky preview column: the real PDF with filled values on top */}
         <div className="hidden lg:block">
           <div className="sticky top-24 space-y-6 self-start">
-            {Array.from({ length: template.pageCount }, (_, i) => (
-              <div
-                key={i}
-                id={`preview-page-${i}`}
-                className="overflow-hidden rounded-lg border border-line"
-              >
-                <p className="border-b border-line bg-surface px-3 py-1 text-xs text-ink-dim">
-                  Seite {i + 1}
-                </p>
-                <PagePreview
-                  pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
-                  pageIndex={i}
-                  pageSize={template.pageSizes[i] ?? { width: 612, height: 792 }}
-                  fields={(template.fields ?? []).filter((f) => f.page === i)}
-                  values={previewValues}
-                  rotation={template.pageRotations?.[i] ?? 0}
-                />
-              </div>
-            ))}
+            {Array.from({ length: effectivePageCount }, (_, i) => {
+              // Beyond the template's own pageCount, a virtual page is just
+              // the same underlying PDF page rendered again — the file on
+              // disk was never expanded, only the field list was (locally).
+              const sourcePage = i % template.pageCount;
+              return (
+                <div
+                  key={i}
+                  id={`preview-page-${i}`}
+                  className="overflow-hidden rounded-lg border border-line"
+                >
+                  <p className="border-b border-line bg-surface px-3 py-1 text-xs text-ink-dim">
+                    Seite {i + 1}
+                  </p>
+                  <PagePreview
+                    pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
+                    pageIndex={sourcePage}
+                    pageSize={template.pageSizes[sourcePage] ?? { width: 612, height: 792 }}
+                    fields={effectiveFields.filter((f) => f.page === i)}
+                    values={previewValues}
+                    rotation={template.pageRotations?.[sourcePage] ?? 0}
+                  />
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

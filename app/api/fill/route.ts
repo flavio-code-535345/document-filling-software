@@ -4,11 +4,15 @@ import { readStore, templatePdfPath } from "@/lib/store";
 import { getSession } from "@/lib/session";
 import { jsonError, jsonErrorFor, parseJsonBody } from "@/lib/api";
 import { buildFilenameParts, fillPdf } from "@/lib/pdf/fill";
+import { expandPdfPages, repeatPerPage } from "@/lib/pdf/expand";
+import { expandFieldsForRepeat } from "@/lib/editor-utils";
 import { buildOutputFilename, contentDispositionFilename } from "@/lib/pdf/sanitize";
 import { sendFilledPdfEmail } from "@/lib/email";
-import type { FillValues } from "@/lib/types";
+import type { FillValues, PageRotation, StoredTemplate } from "@/lib/types";
 
 export const runtime = "nodejs";
+
+const MAX_WEEK_BLOCKS = 10;
 
 export async function POST(req: Request) {
   try {
@@ -19,6 +23,10 @@ export async function POST(req: Request) {
       templateId?: string;
       values?: FillValues;
       sendEmail?: boolean;
+      /** "Endlos-Modus", but just for this download — not persisted (see
+       * FillForm.tsx). 1 = the template as stored; each extra block repeats
+       * its entire page set once more, same as the admin repeat-pages route. */
+      weekBlocks?: number;
     }>(req);
 
     const templateId = body.templateId;
@@ -26,8 +34,29 @@ export async function POST(req: Request) {
     if (!templateId) return jsonError("Vorlage fehlt.", 400);
 
     const store = await readStore();
-    const template = store.templates.find((t) => t.id === templateId);
-    if (!template) return jsonError("Vorlage nicht gefunden.", 404);
+    const stored = store.templates.find((t) => t.id === templateId);
+    if (!stored) return jsonError("Vorlage nicht gefunden.", 404);
+
+    const weekBlocks = Math.round(Number(body.weekBlocks) || 1);
+    if (!Number.isInteger(weekBlocks) || weekBlocks < 1 || weekBlocks > MAX_WEEK_BLOCKS) {
+      return jsonError(`weekBlocks muss zwischen 1 und ${MAX_WEEK_BLOCKS} liegen.`, 400);
+    }
+    const times = weekBlocks - 1;
+
+    let template: StoredTemplate = stored;
+    let pdfBytes: Uint8Array | Buffer = await readFile(templatePdfPath(stored.fileName));
+    if (times > 0) {
+      const originalRotations: PageRotation[] =
+        stored.pageRotations ?? Array.from({ length: stored.pageCount }, () => 0 as PageRotation);
+      template = {
+        ...stored,
+        pageCount: stored.pageCount * weekBlocks,
+        pageSizes: repeatPerPage(stored.pageSizes, times),
+        pageRotations: repeatPerPage(originalRotations, times),
+        fields: expandFieldsForRepeat(stored.fields, stored.pageCount, times),
+      };
+      pdfBytes = await expandPdfPages(pdfBytes, stored.pageCount, times);
+    }
 
     // Server-side required validation: every required field must have a value.
     const missing = template.fields.find(
@@ -37,7 +66,6 @@ export async function POST(req: Request) {
       return jsonError(`Bitte fülle das Feld „${missing.label || "?"}" aus.`, 400);
     }
 
-    const pdfBytes = await readFile(templatePdfPath(template.fileName));
     const out = await fillPdf(template, values, pdfBytes);
 
     const filename = buildOutputFilename(
