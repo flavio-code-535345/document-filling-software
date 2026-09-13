@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldKind, PageRotation, TemplateField } from "@/lib/types";
 import { preparePageRender } from "@/lib/pdf/client";
 import { snapAnchors } from "@/lib/geometry";
@@ -16,6 +16,17 @@ const KIND_COLORS: Record<FieldKind, string> = {
   signature: "#f87171",
   matrix: "#f472b6",
 };
+
+/** A field's rendered box size in PDF points — matrix fields derive theirs
+ * from rows/cols/cell size rather than width/height directly. */
+function fieldBoxSize(f: TemplateField): { width: number; height: number } {
+  return f.kind === "matrix"
+    ? {
+        width: (f.matrixCols?.length ?? 0) * (f.matrixCellWidth ?? 20),
+        height: (f.matrixRows?.length ?? 0) * (f.matrixCellHeight ?? 20),
+      }
+    : { width: f.width, height: f.height };
+}
 
 type DragState =
   | { mode: "move"; id: string; startX: number; startY: number; orig: TemplateField }
@@ -89,6 +100,39 @@ export default function PdfPageView({
     null
   );
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  // Labels are hidden by default once fields are packed too tightly to show
+  // them without stacking on top of each other (dense day-grid rows at a
+  // low zoom) — shown again on hover/selection so nothing is ever
+  // permanently unreachable, just not cluttering the default view.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // A field's label floats ~18-20 screen px above its box. On a page where
+  // fields are stacked closely (a day-by-day timesheet grid), that label
+  // rectangle collides with whatever field sits directly above it — bad
+  // enough at 100% zoom already, worse zoomed out. True collision detection
+  // (not just "is this field short") so an isolated field of the same
+  // height (e.g. Name/Vorname, nothing occupies the row above it) still
+  // always shows its label.
+  const crampedIds = useMemo(() => {
+    const cramped = new Set<string>();
+    const boxes = fields.map((f) => {
+      const size = fieldBoxSize(f);
+      return { id: f.id, x: f.x * zoom, y: f.y * zoom, width: size.width * zoom, height: size.height * zoom };
+    });
+    for (const b of boxes) {
+      const labelTop = b.y - 20;
+      const labelBottom = b.y;
+      const collides = boxes.some(
+        (other) =>
+          other.id !== b.id &&
+          b.x < other.x + other.width &&
+          other.x < b.x + b.width &&
+          labelTop < other.y + other.height &&
+          other.y < labelBottom
+      );
+      if (collides) cramped.add(b.id);
+    }
+    return cramped;
+  }, [fields, zoom]);
   const [regionRect, setRegionRect] = useState<{
     x: number;
     y: number;
@@ -403,17 +447,12 @@ export default function PdfPageView({
 
           {/* Field boxes */}
           {fields.map((f) => {
-            const box =
-              f.kind === "matrix"
-                ? {
-                    width: (f.matrixCols?.length ?? 0) * (f.matrixCellWidth ?? 20),
-                    height: (f.matrixRows?.length ?? 0) * (f.matrixCellHeight ?? 20),
-                  }
-                : { width: f.width, height: f.height };
+            const box = fieldBoxSize(f);
             const displayX = f.x * zoom;
             const displayY = f.y * zoom;
             const isMulti = multiSelect.includes(f.id) && f.id !== selectedId;
             const linkColor = f.linkKey ? linkColors?.get(f.linkKey) : undefined;
+            const showLabel = !crampedIds.has(f.id) || f.id === selectedId || isMulti || hoveredId === f.id;
             return (
               <div
                 key={f.id}
@@ -425,6 +464,8 @@ export default function PdfPageView({
                   width: box.width * zoom,
                   height: box.height * zoom,
                 }}
+                onMouseEnter={() => setHoveredId(f.id)}
+                onMouseLeave={() => setHoveredId((h) => (h === f.id ? null : h))}
               >
                 <div
                   className="pointer-events-none absolute inset-0"
@@ -460,35 +501,44 @@ export default function PdfPageView({
                     ))}
                   </div>
                 )}
-                <span
-                  className="pointer-events-none absolute"
-                  style={{
-                    top: -18,
-                    left: -1,
-                    fontSize: Math.max(10, 12 * Math.min(1.2, zoom)),
-                    background: KIND_COLORS[f.kind],
-                    color: "#0b1220",
-                    padding: "1px 5px",
-                    borderRadius: 4,
-                    whiteSpace: "nowrap",
-                    fontWeight: 600,
-                  }}
-                >
-                  {linkColor && (
-                    <span
-                      title="Verknüpftes Feld — ein Wert füllt alle"
-                      style={{
-                        display: "inline-block",
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: linkColor,
-                        marginRight: 4,
-                      }}
-                    />
-                  )}
-                  {f.label || "?"}
-                </span>
+                {linkColor && (
+                  // Always rendered, independent of the label below — anchored
+                  // inside the field's own box (not floating above it), so a
+                  // linked field's dot never disappears just because the row
+                  // is too tightly packed to also show the text label.
+                  <span
+                    className="pointer-events-none absolute z-10"
+                    title="Verknüpftes Feld — ein Wert füllt alle"
+                    style={{
+                      top: 2,
+                      left: 2,
+                      display: "inline-block",
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: linkColor,
+                      boxShadow: "0 0 0 1px rgba(0,0,0,0.4)",
+                    }}
+                  />
+                )}
+                {showLabel && (
+                  <span
+                    className="pointer-events-none absolute"
+                    style={{
+                      top: -18,
+                      left: -1,
+                      fontSize: Math.max(10, 12 * Math.min(1.2, zoom)),
+                      background: KIND_COLORS[f.kind],
+                      color: "#0b1220",
+                      padding: "1px 5px",
+                      borderRadius: 4,
+                      whiteSpace: "nowrap",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {f.label || "?"}
+                  </span>
+                )}
 
                 {f.kind === "matrix" && feintuning === f.id ? (
                   <div className="absolute inset-0 overflow-visible">

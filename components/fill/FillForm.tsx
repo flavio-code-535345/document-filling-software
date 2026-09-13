@@ -295,11 +295,13 @@ export default function FillForm({
   emailAvailable,
   emailTarget,
   hasDefaultSignature,
+  isAdmin,
 }: {
   template: StoredTemplate;
   emailAvailable: boolean;
   emailTarget: string;
   hasDefaultSignature: boolean;
+  isAdmin: boolean;
 }) {
   const groups = useMemo(() => groupFields(template.fields ?? []), [template.fields]);
   const dateGroups = useMemo(
@@ -366,6 +368,55 @@ export default function FillForm({
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // ---- Endlos-Modus (admin-only): repeat/trim this template's pages right
+  // from the fill/export screen, since "how many weeks to print" is a
+  // per-occasion export choice, not a template-design one — see the repeat-
+  // pages/trim-pages routes this reuses (originally in the editor toolbar,
+  // moved here on request). A full reload picks up the changed page/field
+  // count cleanly rather than re-deriving all of FillForm's memoized state
+  // by hand.
+  const [repeatTimes, setRepeatTimes] = useState(1);
+  const [repeating, setRepeating] = useState(false);
+  const [keepPages, setKeepPages] = useState(() => Math.max(1, Math.min(2, template.pageCount - 1)));
+  const [trimming, setTrimming] = useState(false);
+  const [endlessError, setEndlessError] = useState<string | null>(null);
+
+  const repeatPages = async () => {
+    setRepeating(true);
+    setEndlessError(null);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/repeat-pages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ times: repeatTimes }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Wiederholen fehlgeschlagen.");
+      window.location.reload();
+    } catch (err) {
+      setEndlessError(err instanceof Error ? err.message : "Wiederholen fehlgeschlagen.");
+      setRepeating(false);
+    }
+  };
+
+  const trimPages = async () => {
+    setTrimming(true);
+    setEndlessError(null);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/trim-pages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepPages }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Kürzen fehlgeschlagen.");
+      window.location.reload();
+    } catch (err) {
+      setEndlessError(err instanceof Error ? err.message : "Kürzen fehlgeschlagen.");
+      setTrimming(false);
+    }
+  };
 
   // ---- saved drafts ----
   const [savedFills, setSavedFills] = useState<SavedFill[]>([]);
@@ -833,6 +884,70 @@ export default function FillForm({
                 </span>
               </span>
             </label>
+          )}
+
+          {isAdmin && template.pageCount >= 1 && (
+            <section className="rounded-xl border border-dashed border-line bg-surface/50 p-4">
+              <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-dim">
+                Admin: Endlos-Modus
+              </h2>
+              <p className="mb-3 text-xs text-ink-dim">
+                Ändert die Vorlage selbst (PDF + Felder) — wirkt sich auf jede zukünftige Ausfüllung aus, nicht
+                nur auf diesen Download.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={repeatTimes}
+                  onChange={(e) => {
+                    const n = Math.round(Number(e.target.value));
+                    setRepeatTimes(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
+                  }}
+                  className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
+                  title="Wie oft die aktuellen Seiten zusätzlich angehängt werden"
+                />
+                <button
+                  type="button"
+                  disabled={repeating || trimming}
+                  title={`Hängt die aktuellen ${template.pageCount} Seite(n) ${repeatTimes}× erneut an (Ergebnis: ${
+                    template.pageCount * (repeatTimes + 1)
+                  } Seiten). Lädt die Seite danach neu.`}
+                  className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
+                  onClick={() => void repeatPages()}
+                >
+                  {repeating ? "Wiederholt…" : `🔁 ${repeatTimes}× anhängen`}
+                </button>
+                {template.pageCount > 1 && (
+                  <>
+                    <span className="h-5 w-px bg-line" />
+                    <input
+                      type="number"
+                      min={1}
+                      max={template.pageCount - 1}
+                      value={keepPages}
+                      onChange={(e) => {
+                        const n = Math.round(Number(e.target.value));
+                        setKeepPages(Number.isFinite(n) ? Math.min(template.pageCount - 1, Math.max(1, n)) : 1);
+                      }}
+                      className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
+                      title="Auf wie viele Seiten gekürzt werden soll"
+                    />
+                    <button
+                      type="button"
+                      disabled={repeating || trimming}
+                      title={`Entfernt alle Seiten nach Seite ${keepPages} (und deren Felder) dauerhaft. Lädt die Seite danach neu.`}
+                      className="rounded-lg border border-line px-3 py-1.5 text-sm hover:border-accent disabled:opacity-40"
+                      onClick={() => void trimPages()}
+                    >
+                      {trimming ? "Kürzt…" : `✂️ auf ${keepPages} kürzen`}
+                    </button>
+                  </>
+                )}
+              </div>
+              {endlessError && <p className="mt-2 text-sm text-red-400">{endlessError}</p>}
+            </section>
           )}
 
           {error && <p className="text-sm text-red-400">{error}</p>}
