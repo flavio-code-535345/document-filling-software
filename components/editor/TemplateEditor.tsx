@@ -14,6 +14,7 @@ import {
   newFieldId,
   unlinkFields,
   clampPageIndex,
+  parseImportedFields,
 } from "@/lib/editor-utils";
 import { matrixCellCenter } from "@/lib/geometry";
 import PdfPageView from "./PdfPageView";
@@ -88,6 +89,8 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [busy, setBusy] = useState(false);
   const [aiScanning, setAiScanning] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Matrix two-click stamping
   const [pendingMatrix, setPendingMatrix] = useState<{
@@ -573,6 +576,28 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     }
   };
 
+  // ---- Felder importieren: JSON-Feldliste (z. B. von Claude vorbereitet) ----
+  const importFields = async (file: File) => {
+    setImportMessage(null);
+    setError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch {
+      setError("Import fehlgeschlagen: Datei ist kein gültiges JSON.");
+      return;
+    }
+    const { fields: imported, errors } = parseImportedFields(parsed, pageCount);
+    if (imported.length > 0) {
+      setFields((fs) => [...fs, ...imported]);
+      setDirty(true);
+    }
+    const summary = imported.length > 0 ? `✅ ${imported.length} Feld${imported.length === 1 ? "" : "er"} importiert — bitte prüfen und speichern.` : null;
+    const problems = errors.length > 0 ? `${errors.length} übersprungen: ${errors.join(" ")}` : null;
+    if (summary) setImportMessage([summary, problems].filter(Boolean).join(" "));
+    else setError(problems ?? "Import fehlgeschlagen: keine gültigen Felder gefunden.");
+  };
+
   // ---- PDF ersetzen ----
   const replacePdf = async (file: File) => {
     setBusy(true);
@@ -703,6 +728,27 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
             </GroupButton>
           </ToolGroup>
 
+          <ToolGroup label="Import">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void importFields(file);
+              }}
+            />
+            <GroupButton
+              title='Feldliste aus einer JSON-Datei importieren (Array oder { "fields": [...] })'
+              disabled={busy}
+              onClick={() => importInputRef.current?.click()}
+            >
+              📥 JSON importieren
+            </GroupButton>
+          </ToolGroup>
+
           <ToolGroup label="Zoom">
             <div className="flex items-center gap-0.5">
               <GroupButton title="Verkleinern" disabled={zoom <= MIN_ZOOM} onClick={() => setZoom((z) => roundZoom(clampZoom(z * ZOOM_OUT_FACTOR)))}>
@@ -790,6 +836,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         </div>
         {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
         {aiMessage && <p className="mt-1 text-sm text-green-400">{aiMessage}</p>}
+        {importMessage && <p className="mt-1 text-sm text-green-400">{importMessage}</p>}
       </div>
 
       {/* Stage */}
