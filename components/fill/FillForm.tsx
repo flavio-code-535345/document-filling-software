@@ -206,23 +206,65 @@ function isKwField(f: TemplateField): boolean {
 }
 
 /**
+ * Turns a 0-based rank among `total` candidates into a whole-week day
+ * offset, optionally reversed. Shared by the KW-box defaults and the
+ * Datumsreihe panels so "which page gets this week vs. next week" stays in
+ * sync between them. `swap` exists because the mapping "page order = week
+ * order" only holds half the time on an alternating rotation — some
+ * fortnights the earlier page is actually next week's shift, not this
+ * week's — and the app has no way to know that on its own.
+ */
+function weekOffsetForRank(rank: number, total: number, swap: boolean): number {
+  const effectiveRank = swap ? total - 1 - rank : rank;
+  return effectiveRank * 7;
+}
+
+/**
  * Defaults every KW field to the current ISO week, so the form opens already
  * showing "this week" instead of blank boxes. A document can carry more than
  * one KW field (e.g. a duplex two-week Früh-/Spätschicht sheet, one KW box
  * per page/week) — those are numbered in document order, one week apart, so
  * the first box gets the current week, the second the following week, and so
- * on, correctly rolling over a year boundary. Only ever used as an
- * initial/fallback value — a loaded draft's own values still win.
+ * on (or reversed, if `swap` is set), correctly rolling over a year
+ * boundary. Only ever used as an initial/fallback value — a loaded draft's
+ * own values still win, unless the template is in "Tätigkeitsnachweis-Modus"
+ * (see `StoredTemplate.autoCurrentWeek`), which re-applies this over the
+ * draft on purpose.
  */
-function defaultKwValues(fields: TemplateField[]): Record<string, FieldValue> {
+function defaultKwValues(fields: TemplateField[], swap: boolean): Record<string, FieldValue> {
   const kwFields = fields
     .filter(isKwField)
     .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
   const today = new Date();
   const out: Record<string, FieldValue> = {};
   kwFields.forEach((f, i) => {
-    const { week } = isoWeekOf(new Date(today.getTime() + i * 7 * 86400000));
+    const offsetDays = weekOffsetForRank(i, kwFields.length, swap);
+    const { week } = isoWeekOf(new Date(today.getTime() + offsetDays * 86400000));
     out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
+  });
+  return out;
+}
+
+/**
+ * The date-field equivalent of `defaultKwValues`, for "Tätigkeitsnachweis-
+ * Modus": computes the current/next ISO week's Mon-first dates for each
+ * page's date fields (same rank/swap/offset logic as the KW boxes) and
+ * writes them onto every field in each linked group, so it overrides a
+ * saved draft's stale dates exactly like the KW boxes already do.
+ */
+function freshDateValues(
+  dateGroupsByPage: { page: number; groups: LinkedGroup[] }[],
+  swap: boolean
+): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
+  dateGroupsByPage.forEach(({ groups: pageGroups }, i) => {
+    const offsetDays = weekOffsetForRank(i, dateGroupsByPage.length, swap);
+    const { year, week } = isoWeekOf(new Date(Date.now() + offsetDays * 86400000));
+    const dates = isoWeekDates(year, week, pageGroups.length);
+    pageGroups.forEach((g, j) => {
+      if (!dates[j]) return;
+      for (const f of g.fields) out[f.id] = dates[j];
+    });
   });
   return out;
 }
@@ -278,9 +320,48 @@ export default function FillForm({
       .map(([page, pageGroups]) => ({ page, groups: docOrder(pageGroups) }))
       .filter(({ groups: g }) => g.length >= 2);
   }, [dateGroups]);
+
+  // Swaps which page defaults to "this week" vs. "next week" (KW boxes and
+  // Datumsreihe panels alike) — for when an alternating rotation happens to
+  // have the earlier page's shift land on the later week this fortnight.
+  // Persisted per template so it's a once-every-two-weeks flip, not a
+  // per-visit chore. Starts false (SSR-safe) and is corrected from
+  // localStorage in an effect after mount — see the footgun this avoids in
+  // AGENTS.md ("never read localStorage in a lazy useState initializer").
+  const [swapWeeks, setSwapWeeks] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(`docflow:swapWeeks:${template.id}`) === "1") setSwapWeeks(true);
+    } catch {
+      /* ignore */
+    }
+  }, [template.id]);
+  // The async draft-load effect below only runs once per template (it must
+  // not re-fetch drafts every time the toggle flips), so it can't just
+  // close over `swapWeeks` — that would freeze it at whatever it was on
+  // mount (almost always false, since the localStorage restore above lands
+  // a moment later) and then clobber a subsequent swap back to unswapped
+  // once the fetch resolves. Read the live value from this ref instead.
+  const swapWeeksRef = useRef(swapWeeks);
+  useEffect(() => {
+    swapWeeksRef.current = swapWeeks;
+  }, [swapWeeks]);
+  const toggleSwapWeeks = () => {
+    setSwapWeeks((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(`docflow:swapWeeks:${template.id}`, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
+
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(template.fields ?? []),
-    ...defaultKwValues(template.fields ?? []),
+    ...defaultKwValues(template.fields ?? [], swapWeeks),
+    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
   }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -323,7 +404,20 @@ export default function FillForm({
           // Merge (not replace): an auto-draft saved before a KW field
           // existed, or one that never touched it, shouldn't lose the
           // current-week default that's already showing.
-          if (auto) setValues((v) => ({ ...v, ...(auto.values ?? {}) }));
+          if (auto) {
+            setValues((v) => {
+              const merged = { ...v, ...(auto.values ?? {}) };
+              // Tätigkeitsnachweis-Modus: the whole point is to never show a
+              // stale week again, so the fresh KW/date values win over
+              // whatever this draft happened to have saved for them.
+              if (!template.autoCurrentWeek) return merged;
+              return {
+                ...merged,
+                ...defaultKwValues(template.fields ?? [], swapWeeksRef.current),
+                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current),
+              };
+            });
+          }
         }
       } catch {
         if (!cancelled) hydratedRef.current = true;
@@ -333,6 +427,19 @@ export default function FillForm({
       cancelled = true;
     };
   }, [template.id]);
+
+  // Re-derive the KW boxes (always) and the date fields (only in
+  // Tätigkeitsnachweis-Modus) whenever the week assignment is swapped, so
+  // flipping the toggle is a one-click fix instead of also having to
+  // manually re-apply every Datumsreihe panel.
+  useEffect(() => {
+    setValues((v) => ({
+      ...v,
+      ...defaultKwValues(template.fields ?? [], swapWeeks),
+      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
+    }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [swapWeeks]);
 
   // Debounced auto-save (upsert the user's single auto-draft for this template).
   useEffect(() => {
@@ -514,6 +621,14 @@ export default function FillForm({
                 Entwürfe
               </h2>
               <span className="text-xs text-ink-dim">wird automatisch gespeichert</span>
+              {template.autoCurrentWeek && (
+                <span
+                  className="rounded-full border border-accent/60 bg-accent/10 px-2 py-0.5 text-[11px] font-medium text-accent"
+                  title="KW-Ziffernboxen und Datumsfelder werden bei jedem Öffnen automatisch auf die aktuelle/nächste Kalenderwoche gesetzt, unabhängig vom gespeicherten Entwurf."
+                >
+                  🗓 Tätigkeitsnachweis-Modus
+                </span>
+              )}
               {activeDraftId && (
                 <button
                   type="button"
@@ -584,24 +699,40 @@ export default function FillForm({
               One independent panel per qualifying page — see DateSeriesPanel. */}
           {dateGroupsByPage.length > 0 && (
             <section className="rounded-xl border border-line bg-surface p-4">
-              <button
-                type="button"
-                className="flex w-full items-center justify-between"
-                onClick={() => setShowSeries((s) => !s)}
-              >
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
-                  Datumsreihe
-                </h2>
-                <span className="text-ink-dim">{showSeries ? "−" : "+"}</span>
-              </button>
+              <div className="flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  className="flex flex-1 items-center justify-between"
+                  onClick={() => setShowSeries((s) => !s)}
+                >
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                    Datumsreihe
+                  </h2>
+                  <span className="text-ink-dim">{showSeries ? "−" : "+"}</span>
+                </button>
+                {dateGroupsByPage.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={toggleSwapWeeks}
+                    title="Vertauscht, welche Seite die aktuelle bzw. die nächste Kalenderwoche vorschlägt — praktisch bei abwechselnder Früh-/Spätschicht, wenn diese Woche zufällig die spätere Seite betrifft."
+                    className={`shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                      swapWeeks
+                        ? "border-accent bg-accent/20 text-accent"
+                        : "border-line text-ink-dim hover:border-accent hover:text-ink"
+                    }`}
+                  >
+                    🔄 Wochen tauschen
+                  </button>
+                )}
+              </div>
               {showSeries && (
                 <div className="mt-3 space-y-5">
                   {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => (
                     <DateSeriesPanel
-                      key={page}
+                      key={`${page}-${swapWeeks}`}
                       groups={pageGroups}
                       label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
-                      weekOffsetDays={i * 7}
+                      weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length, swapWeeks)}
                       onApply={setGroupValue}
                     />
                   ))}

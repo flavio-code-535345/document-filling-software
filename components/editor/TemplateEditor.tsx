@@ -74,6 +74,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [pageRotations, setPageRotations] = useState<PageRotation[]>(
     template.pageRotations ?? Array.from({ length: template.pageCount }, () => 0)
   );
+  const [autoCurrentWeek, setAutoCurrentWeek] = useState(template.autoCurrentWeek ?? false);
   const [pageIndex, setPageIndex] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId | null>(null);
@@ -91,6 +92,8 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [repeatTimes, setRepeatTimes] = useState(1);
+  const [repeating, setRepeating] = useState(false);
 
   // Matrix two-click stamping
   const [pendingMatrix, setPendingMatrix] = useState<{
@@ -513,7 +516,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       const res = await fetch(`/api/templates/${template.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields, pageRotations }),
+        body: JSON.stringify({ fields, pageRotations, autoCurrentWeek }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || "Speichern fehlgeschlagen.");
@@ -523,6 +526,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       setPageCount(updated.pageCount);
       setPageSizes(updated.pageSizes);
       setPageRotations(updated.pageRotations ?? pageRotations);
+      setAutoCurrentWeek(updated.autoCurrentWeek ?? false);
       setDirty(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
@@ -538,6 +542,7 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     setPageRotations(
       data.template.pageRotations ?? Array.from({ length: data.template.pageCount }, () => 0)
     );
+    setAutoCurrentWeek(data.template.autoCurrentWeek ?? false);
     setDirty(false);
     setSelectedId(null);
     setActiveTool(null);
@@ -600,6 +605,37 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     const problems = skipped.length > 0 ? skipped.join("; ") : null;
     if (summary) setImportMessage([summary, problems].filter(Boolean).join(" "));
     else setError(problems ?? "Import fehlgeschlagen: keine gültigen Felder gefunden.");
+  };
+
+  // ---- Seiten wiederholen ("endlos"-Modus für mehrwöchige Vorlagen) ----
+  const repeatPages = async () => {
+    setRepeating(true);
+    setError(null);
+    setImportMessage(null);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/repeat-pages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ times: repeatTimes }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Wiederholen fehlgeschlagen.");
+      const updated = data.template;
+      templateRef.current = updated;
+      setFields(updated.fields);
+      setPageCount(updated.pageCount);
+      setPageSizes(updated.pageSizes);
+      setPageRotations(updated.pageRotations ?? pageRotations);
+      setSavedAt(updated.updatedAt);
+      setDirty(false);
+      setImportMessage(
+        `✅ ${repeatTimes}× wiederholt — ${updated.pageCount} Seiten insgesamt, ${data.added} Felder hinzugefügt.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Wiederholen fehlgeschlagen.");
+    } finally {
+      setRepeating(false);
+    }
   };
 
   // ---- PDF ersetzen ----
@@ -796,6 +832,49 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
                 {r}°
               </GroupButton>
             ))}
+          </ToolGroup>
+
+          <ToolGroup label="Modus">
+            <GroupButton
+              active={autoCurrentWeek}
+              title='KW-Ziffernboxen und Datumsfelder (je Seite) werden im Ausfüllformular bei jedem Öffnen automatisch auf die aktuelle/nächste Kalenderwoche gesetzt — auch wenn ein gespeicherter Entwurf ältere Werte enthält. Gedacht für einen wiederkehrenden Tätigkeitsnachweis, bei dem die Woche nie "alt" bleiben soll.'
+              onClick={() => {
+                setAutoCurrentWeek((v) => !v);
+                setDirty(true);
+              }}
+            >
+              🗓 Tätigkeitsnachweis-Modus
+            </GroupButton>
+          </ToolGroup>
+
+          <ToolGroup label="Endlos-Modus">
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={repeatTimes}
+                onChange={(e) => {
+                  const n = Math.round(Number(e.target.value));
+                  setRepeatTimes(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
+                }}
+                className="h-7 w-12 rounded-md border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
+                title="Wie oft die aktuellen Seiten zusätzlich angehängt werden"
+              />
+              <GroupButton
+                disabled={busy || repeating || dirty}
+                title={
+                  dirty
+                    ? "Bitte zuerst speichern oder verwerfen — Wiederholen ändert PDF und Felder direkt auf dem Server."
+                    : `Hängt die aktuellen ${pageCount} Seite(n) ${repeatTimes}× erneut an (Ergebnis: ${
+                        pageCount * (repeatTimes + 1)
+                      } Seiten) — z. B. aus einem 2-seitigen Früh-/Spätschicht-Duplex-Blatt (2 Wochen) werden mit 3 Wiederholungen 8 Seiten (8 Wochen). Wird sofort gespeichert.`
+                }
+                onClick={() => void repeatPages()}
+              >
+                {repeating ? "Wiederholt…" : `🔁 ${repeatTimes}× anhängen`}
+              </GroupButton>
+            </div>
           </ToolGroup>
 
           <div className="ml-auto flex flex-col items-end gap-1.5">
