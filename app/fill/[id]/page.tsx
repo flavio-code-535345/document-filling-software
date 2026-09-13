@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getSession, isAdmin } from "@/lib/session";
+import { getSession } from "@/lib/session";
 import { readStore } from "@/lib/store";
 import FillForm from "@/components/fill/FillForm";
 import type { StoredTemplate } from "@/lib/types";
@@ -43,7 +43,6 @@ export default async function FillPage({
       emailAvailable={emailAvailable}
       emailTarget={emailTarget}
       hasDefaultSignature={Boolean(session.user.defaultSignature)}
-      isAdmin={isAdmin(session.user, store)}
     />
   );
 }
