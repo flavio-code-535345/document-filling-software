@@ -324,7 +324,7 @@ export default function FillForm({
     [groups]
   );
   /** Date fields split by page, each in document order — the unit a single
-   * date-series panel operates on (see `showSeries` above). */
+   * date-series panel operates on (see `showAdvanced` below). */
   const dateGroupsByPage = useMemo(() => {
     const byPage = new Map<number, LinkedGroup[]>();
     for (const g of dateGroups) {
@@ -398,7 +398,13 @@ export default function FillForm({
   // KW picker for every date field at once would force them onto the same
   // (or a manually-offset) range. Each qualifying page gets its own
   // independent panel instead — see `DateSeriesPanel` below.
-  const [showSeries, setShowSeries] = useState(true);
+  //
+  // showAdvanced also gates Endlos-Modus (weekBlocks) below — both are
+  // "shape the document before filling it in" decisions, collapsed by
+  // default in one shared "Erweiterte Optionen" section: the KW/date
+  // defaults already showing are right often enough that this doesn't need
+  // to dominate the page every time, and it's one click away, not gone.
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   // ---- auto-draft: persist to the server as the user types ----
   const hydratedRef = useRef(false);
@@ -720,51 +726,84 @@ export default function FillForm({
             )}
           </section>
 
-          {/* Date series: fill a page's date fields with a range or calendar week.
-              One independent panel per qualifying page — see DateSeriesPanel. */}
-          {dateGroupsByPage.length > 0 && (
-            <section className="rounded-xl border border-line bg-surface p-4">
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  className="flex flex-1 items-center justify-between"
-                  onClick={() => setShowSeries((s) => !s)}
-                >
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
-                    Datumsreihe
-                  </h2>
-                  <span className="text-ink-dim">{showSeries ? "−" : "+"}</span>
-                </button>
-                {dateGroupsByPage.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={toggleSwapWeeks}
-                    title="Vertauscht, welche Seite die aktuelle bzw. die nächste Kalenderwoche vorschlägt — praktisch bei abwechselnder Früh-/Spätschicht, wenn diese Woche zufällig die spätere Seite betrifft."
-                    className={`shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                      swapWeeks
-                        ? "border-accent bg-accent/20 text-accent"
-                        : "border-line text-ink-dim hover:border-accent hover:text-ink"
-                    }`}
-                  >
-                    🔄 Wochen tauschen
-                  </button>
+          {/* Everything that shapes the document before you fill it in
+              (how many weeks, which calendar week each page defaults to)
+              lives here, collapsed by default and ahead of the per-page
+              fields — setting "Anzahl Blöcke" reveals new Seite N sections
+              below, so deciding this first (rather than at the bottom, past
+              everything you'd have to scroll back up to) is the point. */}
+          <section className="rounded-xl border border-line bg-surface p-4">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between"
+              onClick={() => setShowAdvanced((s) => !s)}
+            >
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-ink-dim">
+                Erweiterte Optionen
+              </h2>
+              <span className="text-ink-dim">{showAdvanced ? "−" : "+"}</span>
+            </button>
+            {showAdvanced && (
+              <div className="mt-3 space-y-6">
+                <div>
+                  <h3 className="mb-1 text-xs font-semibold text-accent">Endlos-Modus</h3>
+                  <p className="mb-2 text-xs text-ink-dim">
+                    Wiederholt das ganze Dokument nur für diesen Download — die Vorlage selbst bleibt
+                    unverändert. Zurück auf 1 macht es sofort rückgängig.
+                  </p>
+                  <label className="flex items-center gap-2 text-sm">
+                    Anzahl Blöcke
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={weekBlocks}
+                      onChange={(e) => {
+                        const n = Math.round(Number(e.target.value));
+                        setWeekBlocks(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
+                      }}
+                      className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center focus:border-accent focus:outline-none"
+                      title={`${weekBlocks}× das komplette Dokument (${template.pageCount} Seite(n)) = ${effectivePageCount} Seiten in diesem Download`}
+                    />
+                    <span className="text-xs text-ink-dim">= {effectivePageCount} Seiten in diesem Download</span>
+                  </label>
+                </div>
+
+                {dateGroupsByPage.length > 0 && (
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-semibold text-accent">Datumsreihe</h3>
+                      {dateGroupsByPage.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={toggleSwapWeeks}
+                          title="Vertauscht, welche Seite die aktuelle bzw. die nächste Kalenderwoche vorschlägt — praktisch bei abwechselnder Früh-/Spätschicht, wenn diese Woche zufällig die spätere Seite betrifft."
+                          className={`shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                            swapWeeks
+                              ? "border-accent bg-accent/20 text-accent"
+                              : "border-line text-ink-dim hover:border-accent hover:text-ink"
+                          }`}
+                        >
+                          🔄 Wochen tauschen
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-5">
+                      {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => (
+                        <DateSeriesPanel
+                          key={`${page}-${swapWeeks}`}
+                          groups={pageGroups}
+                          label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
+                          weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length, swapWeeks)}
+                          onApply={setGroupValue}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
-              {showSeries && (
-                <div className="mt-3 space-y-5">
-                  {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => (
-                    <DateSeriesPanel
-                      key={`${page}-${swapWeeks}`}
-                      groups={pageGroups}
-                      label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
-                      weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length, swapWeeks)}
-                      onApply={setGroupValue}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-          )}
+            )}
+          </section>
 
           {pageLayouts.map((layout, pageIndex) => {
             if (layout.general.length === 0 && layout.days.length === 0) return null;
@@ -860,32 +899,6 @@ export default function FillForm({
             </label>
           )}
 
-          <section className="rounded-xl border border-dashed border-line bg-surface/50 p-4">
-            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-dim">Endlos-Modus</h2>
-            <p className="mb-3 text-xs text-ink-dim">
-              Wiederholt das ganze Dokument nur für diesen Download — die Vorlage selbst bleibt unverändert.
-              Zurück auf 1 macht es sofort rückgängig.
-            </p>
-            <label className="flex items-center gap-2 text-sm">
-              Anzahl Blöcke
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={weekBlocks}
-                onChange={(e) => {
-                  const n = Math.round(Number(e.target.value));
-                  setWeekBlocks(Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 1);
-                }}
-                className="h-8 w-14 rounded-lg border border-line bg-canvas px-1.5 text-center focus:border-accent focus:outline-none"
-                title={`${weekBlocks}× das komplette Dokument (${template.pageCount} Seite(n)) = ${effectivePageCount} Seiten in diesem Download`}
-              />
-              <span className="text-xs text-ink-dim">
-                = {effectivePageCount} Seiten in diesem Download
-              </span>
-            </label>
-          </section>
-
           {error && <p className="text-sm text-red-400">{error}</p>}
 
           <button
@@ -971,6 +984,8 @@ function DateSeriesPanel({
     });
   };
   const selected = useMemo(() => groups.filter((g) => keys.has(g.key)), [groups, keys]);
+  const allSelected = selected.length === groups.length;
+  const [showFieldPicker, setShowFieldPicker] = useState(false);
 
   const applyRange = () => {
     if (selected.length < 2 || !start || !end) return;
@@ -1080,40 +1095,53 @@ function DateSeriesPanel({
         )}
 
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-xs text-ink-dim">{selected.length} Datumsfelder (von oben nach unten)</span>
-            <div className="flex gap-2 text-xs">
-              <button
-                type="button"
-                className="text-accent hover:underline"
-                onClick={() => setSeries(new Set(groups.map((g) => g.key)))}
-              >
-                Alle
-              </button>
-              <button type="button" className="text-ink-dim hover:underline" onClick={() => setSeries(new Set())}>
-                Keine
-              </button>
+          <button
+            type="button"
+            className="flex items-center gap-1 text-xs text-ink-dim hover:text-ink"
+            onClick={() => setShowFieldPicker((s) => !s)}
+          >
+            <span>{showFieldPicker ? "▾" : "▸"}</span>
+            {allSelected ? `Alle ${groups.length} Datumsfelder` : `${selected.length} von ${groups.length} Datumsfeldern`}
+            {" · Felder anpassen"}
+          </button>
+          {showFieldPicker && (
+            <div className="mt-2">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-xs text-ink-dim">von oben nach unten</span>
+                <div className="flex gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="text-accent hover:underline"
+                    onClick={() => setSeries(new Set(groups.map((g) => g.key)))}
+                  >
+                    Alle
+                  </button>
+                  <button type="button" className="text-ink-dim hover:underline" onClick={() => setSeries(new Set())}>
+                    Keine
+                  </button>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {groups.map((g) => {
+                  const checked = keys.has(g.key);
+                  return (
+                    <button
+                      key={g.key}
+                      type="button"
+                      onClick={() => toggleKey(g.key)}
+                      className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                        checked
+                          ? "border-accent bg-accent/20 text-accent"
+                          : "border-line text-ink-dim hover:border-accent hover:text-ink"
+                      }`}
+                    >
+                      {g.fields[0].label || "?"}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {groups.map((g) => {
-              const checked = keys.has(g.key);
-              return (
-                <button
-                  key={g.key}
-                  type="button"
-                  onClick={() => toggleKey(g.key)}
-                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                    checked
-                      ? "border-accent bg-accent/20 text-accent"
-                      : "border-line text-ink-dim hover:border-accent hover:text-ink"
-                  }`}
-                >
-                  {g.fields[0].label || "?"}
-                </button>
-              );
-            })}
-          </div>
+          )}
         </div>
       </div>
     </div>

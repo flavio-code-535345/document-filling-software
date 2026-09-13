@@ -59,11 +59,34 @@ export function expandFieldsForRepeat(
   if (times <= 0) return fields;
   const out: TemplateField[] = [...fields];
   for (let b = 1; b <= times; b++) {
+    const blockCopies: TemplateField[] = [];
+    // Original label -> this block's relabeled version, for unlinked fields
+    // only (a linked field keeps its original label/identity on purpose).
+    const labelMap = new Map<string, string>();
     for (const f of fields) {
       const copy: TemplateField = { ...f, id: `${f.id}::rep${b}`, page: f.page + b * originalPageCount };
-      if (!copy.linkKey) copy.label = uniqueCopyLabel(f.label, out);
-      out.push(copy);
+      if (!copy.linkKey) {
+        copy.label = uniqueCopyLabel(f.label, [...out, ...blockCopies]);
+        labelMap.set(f.label, copy.label);
+      }
+      blockCopies.push(copy);
     }
+    // A formula references sibling fields by their *original* label
+    // (e.g. a "Total-Std" field summing that week's day fields). Left
+    // as-is, every duplicated copy of it would keep computing from block
+    // 0's fields forever instead of its own block's — invisible as long as
+    // every block happens to hold the same numbers (e.g. default values),
+    // but wrong the moment one block's hours are edited differently from
+    // another's. Rewrite any {Label} this block relabeled to match.
+    for (const copy of blockCopies) {
+      if (copy.formula) {
+        copy.formula = copy.formula.replace(/\{([^}]+)\}/g, (whole, label) => {
+          const mapped = labelMap.get(label.trim());
+          return mapped ? `{${mapped}}` : whole;
+        });
+      }
+    }
+    out.push(...blockCopies);
   }
   return out;
 }
