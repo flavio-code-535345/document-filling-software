@@ -185,6 +185,13 @@ function isoWeekDates(year: number, week: number, count: number): string[] {
   return out;
 }
 
+/** The Monday of a given ISO week, as a Date — for adding/subtracting whole
+ * weeks (e.g. deriving every other Datumsreihe panel's week from the anchor
+ * panel's). */
+function mondayOfIsoWeek(year: number, week: number): Date {
+  return new Date(isoWeekDates(year, week, 1)[0]);
+}
+
 /**
  * ISO-8601 week number (Monday-first; week 1 is the week containing the
  * year's first Thursday) for a given date, via the standard "nearest
@@ -415,6 +422,19 @@ export default function FillForm({
   // the same exclusions instead of silently re-filling a field the panel
   // says to leave alone.
   const [seriesByPage, setSeriesByPage] = useState<Record<number, Set<string> | null>>({});
+
+  // Datumsreihe's "Woche (KW)" mode: only the first (top-most) panel's
+  // Jahr/KW is a real input — every other panel derives its own week from
+  // it, so the pages always read as a strictly increasing sequence instead
+  // of each panel independently defaulting off today's date and drifting
+  // out of order (e.g. after a swap, or once the user edits one panel by
+  // hand). `null` = no manual anchor yet, use today's date for panel 0.
+  const [anchorOverride, setAnchorOverride] = useState<{ year: string; week: string } | null>(null);
+  const dateGroupSize = dateGroupsByPage.length / weekBlocks;
+  const anchorRankOffsetDays = weekOffsetForRank(0, dateGroupSize, swapWeeks);
+  const defaultAnchor = isoWeekOf(new Date(Date.now() + anchorRankOffsetDays * 86400000));
+  const anchorYear = anchorOverride?.year ?? String(defaultAnchor.year);
+  const anchorWeek = anchorOverride?.week ?? String(defaultAnchor.week);
 
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(effectiveFields),
@@ -830,17 +850,33 @@ export default function FillForm({
                       )}
                     </div>
                     <div className="space-y-5">
-                      {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => (
-                        <DateSeriesPanel
-                          key={`${page}-${swapWeeks}`}
-                          groups={pageGroups}
-                          label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
-                          weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length / weekBlocks, swapWeeks)}
-                          onApply={setGroupValue}
-                          selection={seriesByPage[page] ?? null}
-                          onSelectionChange={(next) => setSeriesByPage((prev) => ({ ...prev, [page]: next }))}
-                        />
-                      ))}
+                      {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => {
+                        // Every panel's week is the anchor (panel 0's Jahr/KW)
+                        // shifted by the *difference* between its own rank
+                        // offset and rank 0's — not re-derived from today's
+                        // date independently — so the sequence panel 0, 1, 2, …
+                        // always reads strictly forward from whatever panel 0
+                        // currently shows, regardless of swap/today's date.
+                        const relativeDays = weekOffsetForRank(i, dateGroupSize, swapWeeks) - anchorRankOffsetDays;
+                        const panelDate = new Date(
+                          mondayOfIsoWeek(Number(anchorYear), Number(anchorWeek)).getTime() + relativeDays * 86400000
+                        );
+                        const panelWeek = isoWeekOf(panelDate);
+                        return (
+                          <DateSeriesPanel
+                            key={`${page}-${swapWeeks}`}
+                            groups={pageGroups}
+                            label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
+                            year={i === 0 ? anchorYear : String(panelWeek.year)}
+                            week={i === 0 ? anchorWeek : String(panelWeek.week)}
+                            isAnchor={i === 0}
+                            onAnchorChange={i === 0 ? setAnchorOverride : undefined}
+                            onApply={setGroupValue}
+                            selection={seriesByPage[page] ?? null}
+                            onSelectionChange={(next) => setSeriesByPage((prev) => ({ ...prev, [page]: next }))}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -1000,14 +1036,24 @@ export default function FillForm({
 function DateSeriesPanel({
   groups,
   label,
-  weekOffsetDays = 0,
+  year,
+  week,
+  isAnchor,
+  onAnchorChange,
   onApply,
   selection,
   onSelectionChange,
 }: {
   groups: LinkedGroup[]; // this page's date groups, already in document order, length >= 2
   label?: string;
-  weekOffsetDays?: number;
+  // "Woche (KW)" target — controlled from FillForm, not local state: only
+  // the anchor panel (isAnchor) can actually change it (onAnchorChange),
+  // every other panel just displays what FillForm derived for it from the
+  // anchor, so the sequence across panels always reads strictly forward.
+  year: string;
+  week: string;
+  isAnchor: boolean;
+  onAnchorChange?: (next: { year: string; week: string }) => void;
   onApply: (group: LinkedGroup, value: FieldValue) => void;
   // Lifted up to FillForm (null = all groups on this page) so
   // Tätigkeitsnachweis-Modus's automatic refresh can see the same
@@ -1019,9 +1065,6 @@ function DateSeriesPanel({
   const [mode, setMode] = useState<"range" | "week">("range");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const defaultWeek = useMemo(() => isoWeekOf(new Date(Date.now() + weekOffsetDays * 86400000)), [weekOffsetDays]);
-  const [year, setYear] = useState(() => String(defaultWeek.year));
-  const [week, setWeek] = useState(() => String(defaultWeek.week));
 
   const keys = selection ?? new Set(groups.map((g) => g.key));
   const toggleKey = (key: string) => {
@@ -1119,9 +1162,11 @@ function DateSeriesPanel({
                 type="number"
                 min={2000}
                 max={2100}
-                className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                disabled={!isAnchor}
+                title={isAnchor ? undefined : "Folgt Seite 1 — dort ändern"}
+                className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none disabled:opacity-60"
                 value={year}
-                onChange={(e) => setYear(e.target.value)}
+                onChange={(e) => onAnchorChange?.({ year: e.target.value, week })}
               />
             </label>
             <label className="text-xs text-ink-dim">
@@ -1131,11 +1176,14 @@ function DateSeriesPanel({
                 min={1}
                 max={53}
                 placeholder="z. B. 5"
-                className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                disabled={!isAnchor}
+                title={isAnchor ? undefined : "Folgt Seite 1 — dort ändern"}
+                className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none disabled:opacity-60"
                 value={week}
-                onChange={(e) => setWeek(e.target.value)}
+                onChange={(e) => onAnchorChange?.({ year, week: e.target.value })}
               />
             </label>
+            {!isAnchor && <span className="text-xs text-ink-dim">folgt Seite 1</span>}
             <button
               type="button"
               disabled={!week}
