@@ -120,6 +120,30 @@ export interface ImportFieldsResult {
   fields: TemplateField[];
   /** Human-readable (German) reasons individual entries were skipped. */
   errors: string[];
+  /** Count of entries that were valid but matched a field already on the
+   * template (or already earlier in the same file) and were skipped. */
+  duplicateCount: number;
+}
+
+const DUPLICATE_EPSILON = 0.05; // pt — tolerates JSON round-tripping/rounding, not a real position difference
+
+/** True if two fields would land as the same visible box on the same page —
+ * used to keep "Felder importieren" idempotent (re-importing the same file,
+ * or importing into a template that already has these fields, adds nothing
+ * new instead of silently doubling everything up). Compares label/kind/page
+ * and geometry only; ids are irrelevant since imported ones are never kept,
+ * and cosmetic props (color, font, defaultValue, …) don't make it a
+ * different field. */
+function isSameField(a: TemplateField, b: TemplateField): boolean {
+  return (
+    a.label === b.label &&
+    a.kind === b.kind &&
+    a.page === b.page &&
+    Math.abs(a.x - b.x) < DUPLICATE_EPSILON &&
+    Math.abs(a.y - b.y) < DUPLICATE_EPSILON &&
+    Math.abs(a.width - b.width) < DUPLICATE_EPSILON &&
+    Math.abs(a.height - b.height) < DUPLICATE_EPSILON
+  );
 }
 
 /**
@@ -131,8 +155,17 @@ export interface ImportFieldsResult {
  * (imported IDs are never trusted, so re-importing the same file twice never
  * collides with itself or with existing fields), and `page` is clamped into
  * the template's actual page range rather than rejected.
+ *
+ * `existing` is the template's current fields — anything that would land as
+ * the exact same box (see `isSameField`) is skipped rather than appended
+ * again, so clicking import twice, or importing a file that overlaps fields
+ * you already placed, doesn't duplicate them.
  */
-export function parseImportedFields(raw: unknown, pageCount: number): ImportFieldsResult {
+export function parseImportedFields(
+  raw: unknown,
+  pageCount: number,
+  existing: TemplateField[] = []
+): ImportFieldsResult {
   const list: unknown[] = Array.isArray(raw)
     ? raw
     : raw && typeof raw === "object" && Array.isArray((raw as { fields?: unknown }).fields)
@@ -143,11 +176,14 @@ export function parseImportedFields(raw: unknown, pageCount: number): ImportFiel
     return {
       fields: [],
       errors: ['Kein gültiges Format erkannt — erwartet ein Array oder { "fields": [...] }.'],
+      duplicateCount: 0,
     };
   }
 
   const fields: TemplateField[] = [];
   const errors: string[] = [];
+  const seen = [...existing]; // grows as we go, so dupes *within* the file are caught too
+  let duplicateCount = 0;
 
   list.forEach((item, i) => {
     if (!item || typeof item !== "object") {
@@ -207,10 +243,15 @@ export function parseImportedFields(raw: unknown, pageCount: number): ImportFiel
     if (isNumberArray(f.matrixColDx)) field.matrixColDx = f.matrixColDx;
     if (isNumberArray(f.matrixColDy)) field.matrixColDy = f.matrixColDy;
 
+    if (seen.some((s) => isSameField(s, field))) {
+      duplicateCount += 1;
+      return;
+    }
+    seen.push(field);
     fields.push(field);
   });
 
-  return { fields, errors };
+  return { fields, errors, duplicateCount };
 }
 
 function round2(n: number): number {
