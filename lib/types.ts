@@ -91,6 +91,16 @@ export interface StoredTemplate {
   pageSizes: { width: number; height: number }[];
   /** Per-page display rotation (indexed by 0-based page). */
   pageRotations?: PageRotation[];
+  /**
+   * "Tätigkeitsnachweis-Modus": KW digit-box fields and date fields (grouped
+   * per page, e.g. a duplex Früh-/Spätschicht sheet) are always recomputed
+   * to the current/next ISO week on every fill-form load, overriding
+   * whatever a saved draft has for those specific fields — for a recurring
+   * timesheet where last week's dates are never what you want to see again.
+   * Other fields (name, Von/Bis overrides, …) still restore normally from
+   * drafts. See `FillForm.tsx#freshDateValues`/`defaultKwValues`.
+   */
+  autoCurrentWeek?: boolean;
   fields: TemplateField[];
   createdAt: string;
   updatedAt: string;

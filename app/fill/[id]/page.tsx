@@ -30,11 +30,15 @@ export default async function FillPage({
         {
           id: template.id,
           name: template.name,
+          fileName: template.fileName,
           pageCount: template.pageCount,
           pageSizes: template.pageSizes,
+          pageRotations: template.pageRotations,
           fields: template.fields,
+          autoCurrentWeek: template.autoCurrentWeek,
+          createdAt: template.createdAt,
           updatedAt: template.updatedAt,
-        } as StoredTemplate
+        } satisfies StoredTemplate
       }
       emailAvailable={emailAvailable}
       emailTarget={emailTarget}
