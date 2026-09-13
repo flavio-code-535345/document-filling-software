@@ -587,13 +587,17 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
       setError("Import fehlgeschlagen: Datei ist kein gültiges JSON.");
       return;
     }
-    const { fields: imported, errors } = parseImportedFields(parsed, pageCount);
+    const { fields: imported, errors, duplicateCount } = parseImportedFields(parsed, pageCount, fields);
     if (imported.length > 0) {
       setFields((fs) => [...fs, ...imported]);
       setDirty(true);
     }
     const summary = imported.length > 0 ? `✅ ${imported.length} Feld${imported.length === 1 ? "" : "er"} importiert — bitte prüfen und speichern.` : null;
-    const problems = errors.length > 0 ? `${errors.length} übersprungen: ${errors.join(" ")}` : null;
+    const skipped = [
+      duplicateCount > 0 ? `${duplicateCount} bereits vorhanden (unverändert übersprungen)` : null,
+      errors.length > 0 ? `${errors.length} ungültig: ${errors.join(" ")}` : null,
+    ].filter(Boolean);
+    const problems = skipped.length > 0 ? skipped.join("; ") : null;
     if (summary) setImportMessage([summary, problems].filter(Boolean).join(" "));
     else setError(problems ?? "Import fehlgeschlagen: keine gültigen Felder gefunden.");
   };
