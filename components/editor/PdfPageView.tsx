@@ -452,7 +452,8 @@ export default function PdfPageView({
             const displayY = f.y * zoom;
             const isMulti = multiSelect.includes(f.id) && f.id !== selectedId;
             const linkColor = f.linkKey ? linkColors?.get(f.linkKey) : undefined;
-            const showLabel = !crampedIds.has(f.id) || f.id === selectedId || isMulti || hoveredId === f.id;
+            const isFocused = f.id === selectedId || isMulti || hoveredId === f.id;
+            const showLabel = !crampedIds.has(f.id) || isFocused;
             return (
               <div
                 key={f.id}
@@ -534,6 +535,21 @@ export default function PdfPageView({
                       borderRadius: 4,
                       whiteSpace: "nowrap",
                       fontWeight: 600,
+                      // A long label (e.g. "Frühschicht Montag Pause") is
+                      // routinely wider than its own narrow column, and
+                      // crampedIds only catches labels stacking vertically
+                      // on top of the row above — a full row of adjacent
+                      // narrow fields (Von/Bis/Pause/Stunden) still bleeds
+                      // sideways into each neighbor. Cap every label to
+                      // roughly its own field's width by default (ellipsis
+                      // for the rest) and lift the cap only while focused
+                      // (hover/selected/multi-selected), where a
+                      // deliberately temporary overlap to read the full
+                      // text is fine — same trade the vertical case makes.
+                      maxWidth: isFocused ? "none" : Math.max(box.width * zoom, 36),
+                      overflow: isFocused ? "visible" : "hidden",
+                      textOverflow: "ellipsis",
+                      zIndex: isFocused ? 20 : 1,
                     }}
                   >
                     {f.label || "?"}
