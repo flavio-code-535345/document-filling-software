@@ -94,6 +94,8 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
   const importInputRef = useRef<HTMLInputElement>(null);
   const [repeatTimes, setRepeatTimes] = useState(1);
   const [repeating, setRepeating] = useState(false);
+  const [keepPages, setKeepPages] = useState(() => Math.max(1, Math.min(2, template.pageCount - 1)));
+  const [trimming, setTrimming] = useState(false);
 
   // Matrix two-click stamping
   const [pendingMatrix, setPendingMatrix] = useState<{
@@ -638,6 +640,36 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     }
   };
 
+  // ---- Seiten kürzen (Umkehrung von "Endlos-Modus", z. B. nach zu oft Wiederholen) ----
+  const trimPages = async () => {
+    setTrimming(true);
+    setError(null);
+    setImportMessage(null);
+    try {
+      const res = await fetch(`/api/templates/${template.id}/trim-pages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepPages }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || "Kürzen fehlgeschlagen.");
+      const updated = data.template;
+      templateRef.current = updated;
+      setFields(updated.fields);
+      setPageCount(updated.pageCount);
+      setPageSizes(updated.pageSizes);
+      setPageRotations(updated.pageRotations ?? []);
+      setPageIndex((p) => clampPageIndex(p, updated.pageCount));
+      setSavedAt(updated.updatedAt);
+      setDirty(false);
+      setImportMessage(`✅ Auf ${updated.pageCount} Seiten gekürzt — ${data.removed} Felder entfernt.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Kürzen fehlgeschlagen.");
+    } finally {
+      setTrimming(false);
+    }
+  };
+
   // ---- PDF ersetzen ----
   const replacePdf = async (file: File) => {
     setBusy(true);
@@ -874,6 +906,34 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
               >
                 {repeating ? "Wiederholt…" : `🔁 ${repeatTimes}× anhängen`}
               </GroupButton>
+              {pageCount > 1 && (
+                <>
+                  <span className="mx-0.5 h-4 w-px bg-line" />
+                  <input
+                    type="number"
+                    min={1}
+                    max={pageCount - 1}
+                    value={keepPages}
+                    onChange={(e) => {
+                      const n = Math.round(Number(e.target.value));
+                      setKeepPages(Number.isFinite(n) ? Math.min(pageCount - 1, Math.max(1, n)) : 1);
+                    }}
+                    className="h-7 w-12 rounded-md border border-line bg-canvas px-1.5 text-center text-sm focus:border-accent focus:outline-none"
+                    title="Auf wie viele Seiten gekürzt werden soll"
+                  />
+                  <GroupButton
+                    disabled={busy || trimming || dirty}
+                    title={
+                      dirty
+                        ? "Bitte zuerst speichern oder verwerfen — Kürzen ändert PDF und Felder direkt auf dem Server."
+                        : `Entfernt alle Seiten nach Seite ${keepPages} (und deren Felder) dauerhaft — die Umkehrung von "Endlos-Modus", z. B. nach zu oft Wiederholen. Wird sofort gespeichert.`
+                    }
+                    onClick={() => void trimPages()}
+                  >
+                    {trimming ? "Kürzt…" : `✂️ auf ${keepPages} kürzen`}
+                  </GroupButton>
+                </>
+              )}
             </div>
           </ToolGroup>
 
