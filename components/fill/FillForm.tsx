@@ -241,41 +241,67 @@ function weekOffsetForRank(rank: number, groupSize: number, swap: boolean): numb
 }
 
 /**
- * Defaults every KW field to the current ISO week, so the form opens already
- * showing "this week" instead of blank boxes. A document can carry more than
- * one KW field (e.g. a duplex two-week Früh-/Spätschicht sheet, one KW box
- * per page/week) — those are numbered in document order, one week apart, so
- * the first box gets the current week, the second the following week, and so
- * on (or reversed, if `swap` is set), correctly rolling over a year
- * boundary. Only ever used as an initial/fallback value — a loaded draft's
- * own values still win, unless the template is in "Tätigkeitsnachweis-Modus"
- * (see `StoredTemplate.autoCurrentWeek`), which re-applies this over the
- * draft on purpose.
+ * The ISO week a given page rank resolves to, once the anchor (the first
+ * Datumsreihe panel's Jahr/KW) and the swap/groupSize scheme are known.
+ * Shared by the KW-box defaults, the automatic date refresh, and the
+ * Datumsreihe panels' own rendering so all three always agree on which week
+ * a given page shows — they used to each recompute their own offset from
+ * `today` independently, which is what let a page's KW box(es) disagree
+ * with its own Datumsreihe panel, and even with each other when a page
+ * carries more than one KW field (e.g. separate Früh-/Spätschicht boxes for
+ * what is otherwise the same week).
  */
-function defaultKwValues(fields: TemplateField[], swap: boolean, weekBlocks: number): Record<string, FieldValue> {
-  const kwFields = fields
-    .filter(isKwField)
-    .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
-  // How many KW fields one Endlos-Modus block contributes — always uniform
-  // across blocks, since every block is an exact repeat of the original
-  // field set. See weekOffsetForRank for why `swap` needs this.
-  const groupSize = kwFields.length / weekBlocks;
-  const today = new Date();
+function weekForRank(
+  rank: number,
+  groupSize: number,
+  swap: boolean,
+  anchorRankOffsetDays: number,
+  anchor: { year: number; week: number }
+): { year: number; week: number } {
+  const relativeDays = weekOffsetForRank(rank, groupSize, swap) - anchorRankOffsetDays;
+  const date = new Date(mondayOfIsoWeek(anchor.year, anchor.week).getTime() + relativeDays * 86400000);
+  return isoWeekOf(date);
+}
+
+/**
+ * Defaults every KW field to its page's week in the shared anchor cascade
+ * (see `weekForRank`), so the form opens already showing "this week" instead
+ * of blank boxes. Fields are ranked and grouped by *page* — via
+ * `weekPageRank`, the same page ranking the Datumsreihe panels use — not
+ * individually, so two KW boxes on the very same page (e.g. a duplex
+ * Früh-/Spätschicht sheet's two subtotal blocks for one shared week) always
+ * agree instead of being treated as separate, one-week-apart entries. Only
+ * ever used as an initial/fallback value — a loaded draft's own values still
+ * win, unless the template is in "Tätigkeitsnachweis-Modus" (see
+ * `StoredTemplate.autoCurrentWeek`) or the anchor/swap/block-count just
+ * changed, both of which re-apply this over the draft on purpose.
+ */
+function defaultKwValues(
+  fields: TemplateField[],
+  swap: boolean,
+  weekPageRank: Map<number, number>,
+  groupSize: number,
+  anchorRankOffsetDays: number,
+  anchor: { year: number; week: number }
+): Record<string, FieldValue> {
   const out: Record<string, FieldValue> = {};
-  kwFields.forEach((f, i) => {
-    const offsetDays = weekOffsetForRank(i, groupSize, swap);
-    const { week } = isoWeekOf(new Date(today.getTime() + offsetDays * 86400000));
+  for (const f of fields) {
+    if (!isKwField(f)) continue;
+    const rank = weekPageRank.get(f.page) ?? 0;
+    const { week } = weekForRank(rank, groupSize, swap, anchorRankOffsetDays, anchor);
     out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
-  });
+  }
   return out;
 }
 
 /**
  * The date-field equivalent of `defaultKwValues`, for "Tätigkeitsnachweis-
- * Modus": computes the current/next ISO week's Mon-first dates for each
- * page's date fields (same rank/swap/offset logic as the KW boxes) and
- * writes them onto every field in each linked group, so it overrides a
- * saved draft's stale dates exactly like the KW boxes already do.
+ * Modus": computes the anchor cascade's Mon-first dates for each page's date
+ * fields (same shared `weekForRank` as the KW boxes and the Datumsreihe
+ * panels) and writes them onto every field in each linked group, so it
+ * overrides a saved draft's stale dates exactly like the KW boxes already
+ * do — and so editing the anchor refreshes the actual date values, not just
+ * the panels' displayed Jahr/KW.
  *
  * `seriesByPage` is the same per-page field selection the Datumsreihe
  * panel's checkboxes drive (lifted up to FillForm so both can see it) — a
@@ -289,14 +315,16 @@ function defaultKwValues(fields: TemplateField[], swap: boolean, weekBlocks: num
 function freshDateValues(
   dateGroupsByPage: { page: number; groups: LinkedGroup[] }[],
   swap: boolean,
-  weekBlocks: number,
+  weekPageRank: Map<number, number>,
+  groupSize: number,
+  anchorRankOffsetDays: number,
+  anchor: { year: number; week: number },
   seriesByPage: Record<number, Set<string> | null>
 ): Record<string, FieldValue> {
-  const groupSize = dateGroupsByPage.length / weekBlocks;
   const out: Record<string, FieldValue> = {};
-  dateGroupsByPage.forEach(({ page, groups: pageGroups }, i) => {
-    const offsetDays = weekOffsetForRank(i, groupSize, swap);
-    const { year, week } = isoWeekOf(new Date(Date.now() + offsetDays * 86400000));
+  dateGroupsByPage.forEach(({ page, groups: pageGroups }) => {
+    const rank = weekPageRank.get(page) ?? 0;
+    const { year, week } = weekForRank(rank, groupSize, swap, anchorRankOffsetDays, anchor);
     const dates = isoWeekDates(year, week, pageGroups.length);
     const selection = seriesByPage[page];
     pageGroups.forEach((g, j) => {
@@ -379,6 +407,26 @@ export default function FillForm({
       .filter(({ groups: g }) => g.length >= 2);
   }, [dateGroups]);
 
+  // Every page that takes part in the week cascade: anything with either a
+  // qualifying date-field grid (`dateGroupsByPage`) or at least one KW
+  // digit-box field, in document order. KW boxes and a page's own
+  // Datumsreihe panel must always agree on which week that page is — and so
+  // must two KW boxes that happen to share one page (e.g. separate Früh-/
+  // Spätschicht subtotal blocks for what is otherwise the same week) — so
+  // both are ranked from this one shared list instead of the KW boxes using
+  // their own independent, per-field ranking.
+  const weekPages = useMemo(() => {
+    const pages = new Set<number>();
+    for (const { page } of dateGroupsByPage) pages.add(page);
+    for (const f of effectiveFields) if (isKwField(f)) pages.add(f.page);
+    return [...pages].sort((a, b) => a - b);
+  }, [dateGroupsByPage, effectiveFields]);
+  const weekPageRank = useMemo(() => new Map(weekPages.map((p, i) => [p, i])), [weekPages]);
+  // How many week-pages one Endlos-Modus block contributes — always uniform
+  // across blocks, since every block is an exact repeat of the original
+  // field set. See weekOffsetForRank for why `swap` needs this.
+  const weekGroupSize = weekPages.length / weekBlocks;
+
   // Swaps which page defaults to "this week" vs. "next week" (KW boxes and
   // Datumsreihe panels alike) — for when an alternating rotation happens to
   // have the earlier page's shift land on the later week this fortnight.
@@ -430,16 +478,34 @@ export default function FillForm({
   // out of order (e.g. after a swap, or once the user edits one panel by
   // hand). `null` = no manual anchor yet, use today's date for panel 0.
   const [anchorOverride, setAnchorOverride] = useState<{ year: string; week: string } | null>(null);
-  const dateGroupSize = dateGroupsByPage.length / weekBlocks;
-  const anchorRankOffsetDays = weekOffsetForRank(0, dateGroupSize, swapWeeks);
+  // The anchor is always panel 0's page (the first page with a qualifying
+  // Datumsreihe grid) — but its *rank* comes from the shared `weekPageRank`,
+  // not a hardcoded 0, in case a KW-only page (no date grid of its own)
+  // happens to sort earlier in the document.
+  const anchorPageRank = dateGroupsByPage.length > 0 ? weekPageRank.get(dateGroupsByPage[0].page) ?? 0 : 0;
+  const anchorRankOffsetDays = weekOffsetForRank(anchorPageRank, weekGroupSize, swapWeeks);
   const defaultAnchor = isoWeekOf(new Date(Date.now() + anchorRankOffsetDays * 86400000));
   const anchorYear = anchorOverride?.year ?? String(defaultAnchor.year);
   const anchorWeek = anchorOverride?.week ?? String(defaultAnchor.week);
+  // Guards `defaultKwValues`/`freshDateValues` (which write straight into
+  // real field values) against a transient invalid anchor — e.g. mid-edit
+  // with the KW box momentarily empty, or a typo like week 99 — falling
+  // back to the un-overridden default instead of stamping "NaN" into every
+  // KW field in the document. The live panel display below still shows
+  // exactly what's typed, invalid or not, so the user sees their own input.
+  const anchorYearNum = Number(anchorYear);
+  const anchorWeekNum = Number(anchorWeek);
+  const safeAnchor =
+    Number.isInteger(anchorYearNum) && Number.isInteger(anchorWeekNum) && anchorWeekNum >= 1 && anchorWeekNum <= 53
+      ? { year: anchorYearNum, week: anchorWeekNum }
+      : defaultAnchor;
 
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(effectiveFields),
-    ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
-    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks, seriesByPage) : {}),
+    ...defaultKwValues(effectiveFields, swapWeeks, weekPageRank, weekGroupSize, anchorRankOffsetDays, safeAnchor),
+    ...(template.autoCurrentWeek
+      ? freshDateValues(dateGroupsByPage, swapWeeks, weekPageRank, weekGroupSize, anchorRankOffsetDays, safeAnchor, seriesByPage)
+      : {}),
   }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -497,8 +563,23 @@ export default function FillForm({
               if (!template.autoCurrentWeek) return merged;
               return {
                 ...merged,
-                ...defaultKwValues(effectiveFields, swapWeeksRef.current, weekBlocks),
-                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current, weekBlocks, seriesByPage),
+                ...defaultKwValues(
+                  effectiveFields,
+                  swapWeeksRef.current,
+                  weekPageRank,
+                  weekGroupSize,
+                  anchorRankOffsetDays,
+                  safeAnchor
+                ),
+                ...freshDateValues(
+                  dateGroupsByPage,
+                  swapWeeksRef.current,
+                  weekPageRank,
+                  weekGroupSize,
+                  anchorRankOffsetDays,
+                  safeAnchor,
+                  seriesByPage
+                ),
               };
             });
           }
@@ -513,10 +594,12 @@ export default function FillForm({
   }, [template.id]);
 
   // Re-derive the KW boxes (always) and the date fields (only in
-  // Tätigkeitsnachweis-Modus) whenever the week assignment is swapped, or
-  // the temporary week-block count changes (a newly-revealed block's KW/date
-  // fields need their own defaults too) — so both are a one-click fix
-  // instead of also having to manually re-apply every Datumsreihe panel.
+  // Tätigkeitsnachweis-Modus) whenever the week assignment is swapped, the
+  // temporary week-block count changes (a newly-revealed block's KW/date
+  // fields need their own defaults too), or the anchor itself is edited on
+  // panel 0 — so every KW box in the document (not just the Datumsreihe
+  // panels' own displayed Jahr/KW) follows the anchor automatically, and
+  // none of this needs a manual re-apply per page.
   // defaultStaticValues goes in *underneath* the current values (spread
   // first) rather than overriding them, so growing weekBlocks backfills a
   // new block's defaultValue fields (e.g. a shift's usual Von/Bis/Pause)
@@ -527,11 +610,13 @@ export default function FillForm({
     setValues((v) => ({
       ...defaultStaticValues(effectiveFields),
       ...v,
-      ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
-      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks, seriesByPage) : {}),
+      ...defaultKwValues(effectiveFields, swapWeeks, weekPageRank, weekGroupSize, anchorRankOffsetDays, safeAnchor),
+      ...(template.autoCurrentWeek
+        ? freshDateValues(dateGroupsByPage, swapWeeks, weekPageRank, weekGroupSize, anchorRankOffsetDays, safeAnchor, seriesByPage)
+        : {}),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [swapWeeks, weekBlocks, seriesByPage]);
+  }, [swapWeeks, weekBlocks, seriesByPage, anchorYear, anchorWeek]);
 
   // Debounced auto-save (upsert the user's single auto-draft for this template).
   useEffect(() => {
@@ -853,15 +938,20 @@ export default function FillForm({
                       {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => {
                         // Every panel's week is the anchor (panel 0's Jahr/KW)
                         // shifted by the *difference* between its own rank
-                        // offset and rank 0's — not re-derived from today's
-                        // date independently — so the sequence panel 0, 1, 2, …
-                        // always reads strictly forward from whatever panel 0
-                        // currently shows, regardless of swap/today's date.
-                        const relativeDays = weekOffsetForRank(i, dateGroupSize, swapWeeks) - anchorRankOffsetDays;
-                        const panelDate = new Date(
-                          mondayOfIsoWeek(Number(anchorYear), Number(anchorWeek)).getTime() + relativeDays * 86400000
-                        );
-                        const panelWeek = isoWeekOf(panelDate);
+                        // offset and the anchor page's — not re-derived from
+                        // today's date independently — so the sequence panel
+                        // 0, 1, 2, … always reads strictly forward from
+                        // whatever panel 0 currently shows, regardless of
+                        // swap/today's date. The rank comes from the shared
+                        // `weekPageRank` (not this map's own index `i`), the
+                        // same one the KW boxes use, so a page's panel and its
+                        // own KW field(s) always land on the same week.
+                        // Only used for i > 0 below (panel 0 shows the raw,
+                        // possibly-still-being-typed anchorYear/anchorWeek
+                        // directly, not this derived value), so it's fine to
+                        // always compute it from the validated `safeAnchor`.
+                        const rank = weekPageRank.get(page) ?? i;
+                        const panelWeek = weekForRank(rank, weekGroupSize, swapWeeks, anchorRankOffsetDays, safeAnchor);
                         return (
                           <DateSeriesPanel
                             key={`${page}-${swapWeeks}`}
