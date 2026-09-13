@@ -269,21 +269,36 @@ function defaultKwValues(fields: TemplateField[], swap: boolean, weekBlocks: num
  * page's date fields (same rank/swap/offset logic as the KW boxes) and
  * writes them onto every field in each linked group, so it overrides a
  * saved draft's stale dates exactly like the KW boxes already do.
+ *
+ * `seriesByPage` is the same per-page field selection the Datumsreihe
+ * panel's checkboxes drive (lifted up to FillForm so both can see it) — a
+ * group deselected there (e.g. "I don't work Saturdays") is skipped here
+ * too, instead of Tätigkeitsnachweis-Modus silently re-filling it on every
+ * refresh regardless of what the panel says. The full week is always
+ * computed over *every* group first and only then filtered down to the
+ * included ones, so excluding a day in the middle of the week doesn't
+ * shift the following days' dates by one slot.
  */
 function freshDateValues(
   dateGroupsByPage: { page: number; groups: LinkedGroup[] }[],
   swap: boolean,
-  weekBlocks: number
+  weekBlocks: number,
+  seriesByPage: Record<number, Set<string> | null>
 ): Record<string, FieldValue> {
   const groupSize = dateGroupsByPage.length / weekBlocks;
   const out: Record<string, FieldValue> = {};
-  dateGroupsByPage.forEach(({ groups: pageGroups }, i) => {
+  dateGroupsByPage.forEach(({ page, groups: pageGroups }, i) => {
     const offsetDays = weekOffsetForRank(i, groupSize, swap);
     const { year, week } = isoWeekOf(new Date(Date.now() + offsetDays * 86400000));
     const dates = isoWeekDates(year, week, pageGroups.length);
+    const selection = seriesByPage[page];
     pageGroups.forEach((g, j) => {
-      if (!dates[j]) return;
-      for (const f of g.fields) out[f.id] = dates[j];
+      const included = !selection || selection.has(g.key);
+      // Explicitly clear an excluded field (not just "leave it out of
+      // `out`") so unchecking it in the Datumsreihe panel blanks it
+      // immediately, rather than freezing whatever date it already had.
+      const value = included ? dates[j] : undefined;
+      for (const f of g.fields) out[f.id] = value;
     });
   });
   return out;
@@ -394,10 +409,17 @@ export default function FillForm({
     });
   };
 
+  // Which of a page's date fields the Datumsreihe panel's checkboxes have
+  // selected (null = all) — lifted up from DateSeriesPanel so
+  // Tätigkeitsnachweis-Modus's automatic refresh (freshDateValues) can see
+  // the same exclusions instead of silently re-filling a field the panel
+  // says to leave alone.
+  const [seriesByPage, setSeriesByPage] = useState<Record<number, Set<string> | null>>({});
+
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(effectiveFields),
     ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
-    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks) : {}),
+    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks, seriesByPage) : {}),
   }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -456,7 +478,7 @@ export default function FillForm({
               return {
                 ...merged,
                 ...defaultKwValues(effectiveFields, swapWeeksRef.current, weekBlocks),
-                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current, weekBlocks),
+                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current, weekBlocks, seriesByPage),
               };
             });
           }
@@ -486,10 +508,10 @@ export default function FillForm({
       ...defaultStaticValues(effectiveFields),
       ...v,
       ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
-      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks) : {}),
+      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks, seriesByPage) : {}),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [swapWeeks, weekBlocks]);
+  }, [swapWeeks, weekBlocks, seriesByPage]);
 
   // Debounced auto-save (upsert the user's single auto-draft for this template).
   useEffect(() => {
@@ -815,6 +837,8 @@ export default function FillForm({
                           label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
                           weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length / weekBlocks, swapWeeks)}
                           onApply={setGroupValue}
+                          selection={seriesByPage[page] ?? null}
+                          onSelectionChange={(next) => setSeriesByPage((prev) => ({ ...prev, [page]: next }))}
                         />
                       ))}
                     </div>
@@ -978,13 +1002,20 @@ function DateSeriesPanel({
   label,
   weekOffsetDays = 0,
   onApply,
+  selection,
+  onSelectionChange,
 }: {
   groups: LinkedGroup[]; // this page's date groups, already in document order, length >= 2
   label?: string;
   weekOffsetDays?: number;
   onApply: (group: LinkedGroup, value: FieldValue) => void;
+  // Lifted up to FillForm (null = all groups on this page) so
+  // Tätigkeitsnachweis-Modus's automatic refresh can see the same
+  // exclusions this panel's checkboxes set, instead of always re-filling
+  // every date field regardless of what's unchecked here.
+  selection: Set<string> | null;
+  onSelectionChange: (next: Set<string> | null) => void;
 }) {
-  const [series, setSeries] = useState<Set<string> | null>(null); // null = all groups on this page
   const [mode, setMode] = useState<"range" | "week">("range");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -992,15 +1023,13 @@ function DateSeriesPanel({
   const [year, setYear] = useState(() => String(defaultWeek.year));
   const [week, setWeek] = useState(() => String(defaultWeek.week));
 
-  const keys = series ?? new Set(groups.map((g) => g.key));
+  const keys = selection ?? new Set(groups.map((g) => g.key));
   const toggleKey = (key: string) => {
-    setSeries((prev) => {
-      const base = prev ?? new Set(groups.map((g) => g.key));
-      const next = new Set(base);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    const base = selection ?? new Set(groups.map((g) => g.key));
+    const next = new Set(base);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    onSelectionChange(next);
   };
   const selected = useMemo(() => groups.filter((g) => keys.has(g.key)), [groups, keys]);
   const allSelected = selected.length === groups.length;
@@ -1027,9 +1056,14 @@ function DateSeriesPanel({
     const y = parseInt(year, 10);
     const w = parseInt(week, 10);
     if (!Number.isInteger(y) || !Number.isInteger(w) || w < 1 || w > 53) return;
-    const dates = isoWeekDates(y, w, selected.length);
-    selected.forEach((g, i) => {
-      if (dates[i]) onApply(g, dates[i]);
+    // Computed over *every* group (Monday-first) and only then filtered
+    // down to the selected ones by each group's own position — not
+    // `selected`'s position — so deselecting a day in the middle of the
+    // week (not just a trailing one) doesn't shift the remaining days'
+    // dates by one slot.
+    const dates = isoWeekDates(y, w, groups.length);
+    groups.forEach((g, i) => {
+      if (keys.has(g.key) && dates[i]) onApply(g, dates[i]);
     });
   };
 
@@ -1131,11 +1165,15 @@ function DateSeriesPanel({
                   <button
                     type="button"
                     className="text-accent hover:underline"
-                    onClick={() => setSeries(new Set(groups.map((g) => g.key)))}
+                    onClick={() => onSelectionChange(new Set(groups.map((g) => g.key)))}
                   >
                     Alle
                   </button>
-                  <button type="button" className="text-ink-dim hover:underline" onClick={() => setSeries(new Set())}>
+                  <button
+                    type="button"
+                    className="text-ink-dim hover:underline"
+                    onClick={() => onSelectionChange(new Set())}
+                  >
                     Keine
                   </button>
                 </div>
