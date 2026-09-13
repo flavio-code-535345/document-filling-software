@@ -450,8 +450,15 @@ export default function FillForm({
   // the temporary week-block count changes (a newly-revealed block's KW/date
   // fields need their own defaults too) — so both are a one-click fix
   // instead of also having to manually re-apply every Datumsreihe panel.
+  // defaultStaticValues goes in *underneath* the current values (spread
+  // first) rather than overriding them, so growing weekBlocks backfills a
+  // new block's defaultValue fields (e.g. a shift's usual Von/Bis/Pause)
+  // without clobbering anything already showing on the original pages —
+  // those keep whatever's already there (an earlier default, or the user's
+  // own edit); only fields with no entry at all pick up their default here.
   useEffect(() => {
     setValues((v) => ({
+      ...defaultStaticValues(effectiveFields),
       ...v,
       ...defaultKwValues(effectiveFields, swapWeeks),
       ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
