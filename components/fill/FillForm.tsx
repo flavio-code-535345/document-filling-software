@@ -452,6 +452,17 @@ export default function FillForm({
   useEffect(() => {
     swapWeeksRef.current = swapWeeks;
   }, [swapWeeks]);
+
+  // Datumsreihe's "Woche (KW)" mode: only the first (top-most) panel's
+  // Jahr/KW is a real input — every other panel derives its own week from
+  // it, so the pages always read as a strictly increasing sequence instead
+  // of each panel independently defaulting off today's date and drifting
+  // out of order (e.g. after a swap, or once the user edits one panel by
+  // hand). `null` = no manual anchor yet, use today's date for panel 0.
+  // Declared here (not down by its other derivations) so `toggleSwapWeeks`
+  // below can clear it.
+  const [anchorOverride, setAnchorOverride] = useState<{ year: string; week: string } | null>(null);
+
   const toggleSwapWeeks = () => {
     setSwapWeeks((prev) => {
       const next = !prev;
@@ -462,6 +473,18 @@ export default function FillForm({
       }
       return next;
     });
+    // The anchor page's own resolved week is *defined* relative to its own
+    // rank offset (see anchorRankOffsetDays below), so it algebraically
+    // never moves on its own — only the follower pages shift around it.
+    // That's fine while the admin hasn't typed anything (the un-overridden
+    // default already reacts to swap, since it's computed the same way),
+    // but once they have, the override pins panel 1 to that literal string
+    // forever, and swapping would otherwise look like it does nothing at
+    // all: every *other* page visibly moves, and the one page the toggle is
+    // right next to does not. Clearing it here re-derives a fresh,
+    // swap-aware default instead — consistent with weekBlocks changes,
+    // which already force a full KW/date recompute over whatever was typed.
+    setAnchorOverride(null);
   };
 
   // Which of a page's date fields the Datumsreihe panel's checkboxes have
@@ -471,13 +494,6 @@ export default function FillForm({
   // says to leave alone.
   const [seriesByPage, setSeriesByPage] = useState<Record<number, Set<string> | null>>({});
 
-  // Datumsreihe's "Woche (KW)" mode: only the first (top-most) panel's
-  // Jahr/KW is a real input — every other panel derives its own week from
-  // it, so the pages always read as a strictly increasing sequence instead
-  // of each panel independently defaulting off today's date and drifting
-  // out of order (e.g. after a swap, or once the user edits one panel by
-  // hand). `null` = no manual anchor yet, use today's date for panel 0.
-  const [anchorOverride, setAnchorOverride] = useState<{ year: string; week: string } | null>(null);
   // The anchor is always panel 0's page (the first page with a qualifying
   // Datumsreihe grid) — but its *rank* comes from the shared `weekPageRank`,
   // not a hardcoded 0, in case a KW-only page (no date grid of its own)
