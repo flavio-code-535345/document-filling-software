@@ -1,5 +1,14 @@
 // Pure helpers for the visual editor.
-import type { FieldKind, TemplateField } from "@/lib/types";
+import type {
+  FieldKind,
+  FontFamily,
+  FontStyle,
+  FontWeight,
+  OverflowMode,
+  TemplateField,
+  TextAlign,
+  VerticalAlign,
+} from "@/lib/types";
 
 export function newFieldId(): string {
   return `f${crypto.randomUUID().replaceAll("-", "")}`;
@@ -87,6 +96,121 @@ export function createField(
 /** Build a "repair" helper target: fields on a page index >= pageCount → 0. */
 export function clampPageIndex(page: number, pageCount: number): number {
   return Math.min(Math.max(0, page), Math.max(0, pageCount - 1));
+}
+
+const FIELD_KINDS: FieldKind[] = ["text", "multiline", "date", "checkbox", "signature", "matrix"];
+const TEXT_ALIGNS: TextAlign[] = ["left", "center", "right"];
+const VERTICAL_ALIGNS: VerticalAlign[] = ["top", "middle", "bottom"];
+const OVERFLOW_MODES: OverflowMode[] = ["shrink", "visible"];
+const FONT_FAMILIES: FontFamily[] = ["Helvetica", "Times-Roman", "Courier"];
+const FONT_WEIGHTS: FontWeight[] = ["normal", "bold"];
+const FONT_STYLES: FontStyle[] = ["normal", "italic"];
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+function isStringArray(v: unknown): v is string[] {
+  return Array.isArray(v) && v.every((x) => typeof x === "string");
+}
+function isNumberArray(v: unknown): v is number[] {
+  return Array.isArray(v) && v.every((x) => isFiniteNumber(x));
+}
+
+export interface ImportFieldsResult {
+  fields: TemplateField[];
+  /** Human-readable (German) reasons individual entries were skipped. */
+  errors: string[];
+}
+
+/**
+ * Parses and validates a field list for the "Felder importieren" feature:
+ * either `TemplateField[]`-shaped JSON or `{ "fields": [...] }`. Only
+ * `label`/`kind`/`x`/`y`/`width`/`height` are required per entry — everything
+ * else is optional and defaulted, matching what the visual editor itself
+ * would produce for a manually-placed field. `id` is always regenerated
+ * (imported IDs are never trusted, so re-importing the same file twice never
+ * collides with itself or with existing fields), and `page` is clamped into
+ * the template's actual page range rather than rejected.
+ */
+export function parseImportedFields(raw: unknown, pageCount: number): ImportFieldsResult {
+  const list: unknown[] = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { fields?: unknown }).fields)
+      ? (raw as { fields: unknown[] }).fields
+      : [];
+
+  if (list.length === 0) {
+    return {
+      fields: [],
+      errors: ['Kein gültiges Format erkannt — erwartet ein Array oder { "fields": [...] }.'],
+    };
+  }
+
+  const fields: TemplateField[] = [];
+  const errors: string[] = [];
+
+  list.forEach((item, i) => {
+    if (!item || typeof item !== "object") {
+      errors.push(`Eintrag ${i + 1}: kein Objekt.`);
+      return;
+    }
+    const f = item as Record<string, unknown>;
+    const label = typeof f.label === "string" && f.label.trim() ? f.label.trim() : null;
+    const kind = typeof f.kind === "string" && FIELD_KINDS.includes(f.kind as FieldKind) ? (f.kind as FieldKind) : null;
+    const geometryOk = ["x", "y", "width", "height"].every((k) => isFiniteNumber(f[k]));
+
+    if (!label || !kind || !geometryOk) {
+      errors.push(
+        `Eintrag ${i + 1}${label ? ` ("${label}")` : ""}: fehlende oder ungültige Pflichtangaben (label, kind, x, y, width, height).`
+      );
+      return;
+    }
+
+    const field: TemplateField = {
+      id: newFieldId(),
+      label,
+      kind,
+      page: clampPageIndex(isFiniteNumber(f.page) ? f.page : 0, pageCount),
+      x: f.x as number,
+      y: f.y as number,
+      width: f.width as number,
+      height: f.height as number,
+      fontSize: isFiniteNumber(f.fontSize) ? f.fontSize : 11,
+      required: typeof f.required === "boolean" ? f.required : false,
+    };
+
+    if (typeof f.inFileName === "boolean") field.inFileName = f.inFileName;
+    if (typeof f.align === "string" && TEXT_ALIGNS.includes(f.align as TextAlign)) field.align = f.align as TextAlign;
+    if (typeof f.valign === "string" && VERTICAL_ALIGNS.includes(f.valign as VerticalAlign))
+      field.valign = f.valign as VerticalAlign;
+    if (typeof f.overflow === "string" && OVERFLOW_MODES.includes(f.overflow as OverflowMode))
+      field.overflow = f.overflow as OverflowMode;
+    if (isFiniteNumber(f.digitBoxes) && f.digitBoxes > 1) field.digitBoxes = Math.round(f.digitBoxes);
+    if (typeof f.fontFamily === "string" && FONT_FAMILIES.includes(f.fontFamily as FontFamily))
+      field.fontFamily = f.fontFamily as FontFamily;
+    if (typeof f.fontWeight === "string" && FONT_WEIGHTS.includes(f.fontWeight as FontWeight))
+      field.fontWeight = f.fontWeight as FontWeight;
+    if (typeof f.fontStyle === "string" && FONT_STYLES.includes(f.fontStyle as FontStyle))
+      field.fontStyle = f.fontStyle as FontStyle;
+    if (typeof f.textColor === "string") field.textColor = f.textColor;
+    if (typeof f.linkKey === "string" && f.linkKey) field.linkKey = f.linkKey;
+    if (typeof f.formula === "string" && f.formula) field.formula = f.formula;
+    if (typeof f.defaultValue === "string" && f.defaultValue) field.defaultValue = f.defaultValue;
+    if (isStringArray(f.matrixRows)) field.matrixRows = f.matrixRows;
+    if (isStringArray(f.matrixCols)) field.matrixCols = f.matrixCols;
+    if (isFiniteNumber(f.matrixCellWidth)) field.matrixCellWidth = f.matrixCellWidth;
+    if (isFiniteNumber(f.matrixCellHeight)) field.matrixCellHeight = f.matrixCellHeight;
+    if (isFiniteNumber(f.matrixDriftX)) field.matrixDriftX = f.matrixDriftX;
+    if (isFiniteNumber(f.matrixDriftY)) field.matrixDriftY = f.matrixDriftY;
+    if (isNumberArray(f.matrixRowDx)) field.matrixRowDx = f.matrixRowDx;
+    if (isNumberArray(f.matrixRowDy)) field.matrixRowDy = f.matrixRowDy;
+    if (isNumberArray(f.matrixColDx)) field.matrixColDx = f.matrixColDx;
+    if (isNumberArray(f.matrixColDy)) field.matrixColDy = f.matrixColDy;
+
+    fields.push(field);
+  });
+
+  return { fields, errors };
 }
 
 function round2(n: number): number {
