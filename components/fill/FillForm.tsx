@@ -264,6 +264,20 @@ export default function FillForm({
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
   );
+  /** Date fields split by page, each in document order — the unit a single
+   * date-series panel operates on (see `showSeries` above). */
+  const dateGroupsByPage = useMemo(() => {
+    const byPage = new Map<number, LinkedGroup[]>();
+    for (const g of dateGroups) {
+      const page = g.fields[0].page;
+      if (!byPage.has(page)) byPage.set(page, []);
+      byPage.get(page)!.push(g);
+    }
+    return [...byPage.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([page, pageGroups]) => ({ page, groups: docOrder(pageGroups) }))
+      .filter(({ groups: g }) => g.length >= 2);
+  }, [dateGroups]);
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(template.fields ?? []),
     ...defaultKwValues(template.fields ?? []),
@@ -279,13 +293,13 @@ export default function FillForm({
   const [savingDraft, setSavingDraft] = useState(false);
   const [activeDraftId, setActiveDraftId] = useState<string | null>(null);
 
-  // ---- date series (fills date fields with a range / calendar week) ----
-  const [series, setSeries] = useState<Set<string> | null>(null); // null = all date groups
-  const [seriesMode, setSeriesMode] = useState<"range" | "week">("range");
-  const [seriesStart, setSeriesStart] = useState("");
-  const [seriesEnd, setSeriesEnd] = useState("");
-  const [seriesYear, setSeriesYear] = useState(() => String(isoWeekOf(new Date()).year));
-  const [seriesWeek, setSeriesWeek] = useState(() => String(isoWeekOf(new Date()).week));
+  // ---- date series (fills a page's date fields with a range / calendar week) ----
+  // Grouped per page rather than one flat list across the whole document: a
+  // duplex two-shift sheet has an unrelated week of dates on each page (this
+  // week's Frühschicht, next week's Spätschicht), so one shared Von/Bis or
+  // KW picker for every date field at once would force them onto the same
+  // (or a manually-offset) range. Each qualifying page gets its own
+  // independent panel instead — see `DateSeriesPanel` below.
   const [showSeries, setShowSeries] = useState(true);
 
   // ---- auto-draft: persist to the server as the user types ----
@@ -417,57 +431,6 @@ export default function FillForm({
       const copy = { ...v };
       for (const f of group.fields) copy[f.id] = next;
       return copy;
-    });
-  };
-
-  // ---- date series helpers ----
-  const seriesKeys = useMemo(
-    () => series ?? new Set(dateGroups.map((g) => g.key)),
-    [series, dateGroups]
-  );
-
-  const toggleSeriesKey = (key: string) => {
-    setSeries((prev) => {
-      const base = prev ?? new Set(dateGroups.map((g) => g.key));
-      const next = new Set(base);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const selectAllSeries = () => setSeries(new Set(dateGroups.map((g) => g.key)));
-  const clearSeries = () => setSeries(new Set());
-
-  const selectedDateGroups = useMemo(
-    () => docOrder(dateGroups.filter((g) => seriesKeys.has(g.key))),
-    [dateGroups, seriesKeys]
-  );
-
-  const applyRange = () => {
-    if (selectedDateGroups.length < 2 || !seriesStart || !seriesEnd) return;
-    const start = new Date(seriesStart);
-    const end = new Date(seriesEnd);
-    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return;
-    const dates: string[] = [];
-    let cursor = new Date(start);
-    while (cursor <= end && dates.length < selectedDateGroups.length) {
-      dates.push(cursor.toISOString().slice(0, 10));
-      cursor = new Date(cursor.getTime() + 86400000);
-    }
-    selectedDateGroups.forEach((g, i) => {
-      if (dates[i]) setGroupValue(g, dates[i]);
-    });
-  };
-
-  const applyWeek = () => {
-    if (selectedDateGroups.length < 2) return;
-    const year = parseInt(seriesYear, 10);
-    const week = parseInt(seriesWeek, 10);
-    if (!Number.isInteger(year) || !Number.isInteger(week) || week < 1 || week > 53) return;
-    const dates = isoWeekDates(year, week, selectedDateGroups.length);
-    selectedDateGroups.forEach((g, i) => {
-      if (dates[i]) setGroupValue(g, dates[i]);
     });
   };
 
@@ -617,8 +580,9 @@ export default function FillForm({
             )}
           </section>
 
-          {/* Date series: fill date fields with a range or calendar week */}
-          {dateGroups.length >= 2 && (
+          {/* Date series: fill a page's date fields with a range or calendar week.
+              One independent panel per qualifying page — see DateSeriesPanel. */}
+          {dateGroupsByPage.length > 0 && (
             <section className="rounded-xl border border-line bg-surface p-4">
               <button
                 type="button"
@@ -631,117 +595,16 @@ export default function FillForm({
                 <span className="text-ink-dim">{showSeries ? "−" : "+"}</span>
               </button>
               {showSeries && (
-                <div className="mt-3 space-y-3">
-                  <div className="inline-flex rounded-lg border border-line p-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setSeriesMode("range")}
-                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                        seriesMode === "range" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
-                      }`}
-                    >
-                      Zeitraum
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSeriesMode("week")}
-                      className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                        seriesMode === "week" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
-                      }`}
-                    >
-                      Woche (KW)
-                    </button>
-                  </div>
-
-                  {seriesMode === "range" ? (
-                    <div className="flex flex-wrap items-end gap-2">
-                      <label className="text-xs text-ink-dim">
-                        Von
-                        <DatePicker className="mt-1 w-36" value={seriesStart} onChange={setSeriesStart} />
-                      </label>
-                      <label className="text-xs text-ink-dim">
-                        Bis
-                        <DatePicker className="mt-1 w-36" value={seriesEnd} onChange={setSeriesEnd} />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={!seriesStart || !seriesEnd}
-                        className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
-                        onClick={applyRange}
-                      >
-                        Anwenden
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex flex-wrap items-end gap-2">
-                      <label className="text-xs text-ink-dim">
-                        Jahr
-                        <input
-                          type="number"
-                          min={2000}
-                          max={2100}
-                          className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
-                          value={seriesYear}
-                          onChange={(e) => setSeriesYear(e.target.value)}
-                        />
-                      </label>
-                      <label className="text-xs text-ink-dim">
-                        KW
-                        <input
-                          type="number"
-                          min={1}
-                          max={53}
-                          placeholder="z. B. 5"
-                          className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
-                          value={seriesWeek}
-                          onChange={(e) => setSeriesWeek(e.target.value)}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={!seriesWeek}
-                        className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
-                        onClick={applyWeek}
-                      >
-                        Anwenden
-                      </button>
-                    </div>
-                  )}
-
-                  <div>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-xs text-ink-dim">
-                        {selectedDateGroups.length} Datumsfelder (von oben nach unten)
-                      </span>
-                      <div className="flex gap-2 text-xs">
-                        <button type="button" className="text-accent hover:underline" onClick={selectAllSeries}>
-                          Alle
-                        </button>
-                        <button type="button" className="text-ink-dim hover:underline" onClick={clearSeries}>
-                          Keine
-                        </button>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {dateGroups.map((g) => {
-                        const checked = seriesKeys.has(g.key);
-                        return (
-                          <button
-                            key={g.key}
-                            type="button"
-                            onClick={() => toggleSeriesKey(g.key)}
-                            className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
-                              checked
-                                ? "border-accent bg-accent/20 text-accent"
-                                : "border-line text-ink-dim hover:border-accent hover:text-ink"
-                            }`}
-                          >
-                            {g.fields[0].label || "?"}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                <div className="mt-3 space-y-5">
+                  {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => (
+                    <DateSeriesPanel
+                      key={page}
+                      groups={pageGroups}
+                      label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
+                      weekOffsetDays={i * 7}
+                      onApply={setGroupValue}
+                    />
+                  ))}
                 </div>
               )}
             </section>
@@ -874,6 +737,194 @@ export default function FillForm({
                 />
               </div>
             ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One page's independent "fill a range/week of dates" control — pulled out
+ * of FillForm so each qualifying page (see `dateGroupsByPage`) gets its own
+ * mode/selection/inputs instead of one shared picker trying to cover every
+ * date field in the document at once. `weekOffsetDays` staggers the initial
+ * "Woche (KW)" guess so a second/third panel defaults to the following
+ * week(s) rather than repeating the first panel's week, matching how the KW
+ * digit-box fields themselves default (see `defaultKwValues`).
+ */
+function DateSeriesPanel({
+  groups,
+  label,
+  weekOffsetDays = 0,
+  onApply,
+}: {
+  groups: LinkedGroup[]; // this page's date groups, already in document order, length >= 2
+  label?: string;
+  weekOffsetDays?: number;
+  onApply: (group: LinkedGroup, value: FieldValue) => void;
+}) {
+  const [series, setSeries] = useState<Set<string> | null>(null); // null = all groups on this page
+  const [mode, setMode] = useState<"range" | "week">("range");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const defaultWeek = useMemo(() => isoWeekOf(new Date(Date.now() + weekOffsetDays * 86400000)), [weekOffsetDays]);
+  const [year, setYear] = useState(() => String(defaultWeek.year));
+  const [week, setWeek] = useState(() => String(defaultWeek.week));
+
+  const keys = series ?? new Set(groups.map((g) => g.key));
+  const toggleKey = (key: string) => {
+    setSeries((prev) => {
+      const base = prev ?? new Set(groups.map((g) => g.key));
+      const next = new Set(base);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const selected = useMemo(() => groups.filter((g) => keys.has(g.key)), [groups, keys]);
+
+  const applyRange = () => {
+    if (selected.length < 2 || !start || !end) return;
+    const s = new Date(start);
+    const e = new Date(end);
+    if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime()) || s > e) return;
+    const dates: string[] = [];
+    let cursor = new Date(s);
+    while (cursor <= e && dates.length < selected.length) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor = new Date(cursor.getTime() + 86400000);
+    }
+    selected.forEach((g, i) => {
+      if (dates[i]) onApply(g, dates[i]);
+    });
+  };
+
+  const applyWeek = () => {
+    if (selected.length < 2) return;
+    const y = parseInt(year, 10);
+    const w = parseInt(week, 10);
+    if (!Number.isInteger(y) || !Number.isInteger(w) || w < 1 || w > 53) return;
+    const dates = isoWeekDates(y, w, selected.length);
+    selected.forEach((g, i) => {
+      if (dates[i]) onApply(g, dates[i]);
+    });
+  };
+
+  return (
+    <div>
+      {label && <h3 className="mb-2 text-xs font-semibold text-accent">{label}</h3>}
+      <div className="space-y-3">
+        <div className="inline-flex rounded-lg border border-line p-0.5">
+          <button
+            type="button"
+            onClick={() => setMode("range")}
+            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              mode === "range" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
+            }`}
+          >
+            Zeitraum
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("week")}
+            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              mode === "week" ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
+            }`}
+          >
+            Woche (KW)
+          </button>
+        </div>
+
+        {mode === "range" ? (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs text-ink-dim">
+              Von
+              <DatePicker className="mt-1 w-36" value={start} onChange={setStart} />
+            </label>
+            <label className="text-xs text-ink-dim">
+              Bis
+              <DatePicker className="mt-1 w-36" value={end} onChange={setEnd} />
+            </label>
+            <button
+              type="button"
+              disabled={!start || !end}
+              className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+              onClick={applyRange}
+            >
+              Anwenden
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="text-xs text-ink-dim">
+              Jahr
+              <input
+                type="number"
+                min={2000}
+                max={2100}
+                className="mt-1 block w-24 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                value={year}
+                onChange={(e) => setYear(e.target.value)}
+              />
+            </label>
+            <label className="text-xs text-ink-dim">
+              KW
+              <input
+                type="number"
+                min={1}
+                max={53}
+                placeholder="z. B. 5"
+                className="mt-1 block w-28 rounded-lg border border-line bg-canvas px-2 py-1.5 text-sm focus:border-accent focus:outline-none"
+                value={week}
+                onChange={(e) => setWeek(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={!week}
+              className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-40"
+              onClick={applyWeek}
+            >
+              Anwenden
+            </button>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-xs text-ink-dim">{selected.length} Datumsfelder (von oben nach unten)</span>
+            <div className="flex gap-2 text-xs">
+              <button
+                type="button"
+                className="text-accent hover:underline"
+                onClick={() => setSeries(new Set(groups.map((g) => g.key)))}
+              >
+                Alle
+              </button>
+              <button type="button" className="text-ink-dim hover:underline" onClick={() => setSeries(new Set())}>
+                Keine
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {groups.map((g) => {
+              const checked = keys.has(g.key);
+              return (
+                <button
+                  key={g.key}
+                  type="button"
+                  onClick={() => toggleKey(g.key)}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    checked
+                      ? "border-accent bg-accent/20 text-accent"
+                      : "border-line text-ink-dim hover:border-accent hover:text-ink"
+                  }`}
+                >
+                  {g.fields[0].label || "?"}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
