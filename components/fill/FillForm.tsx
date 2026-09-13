@@ -207,17 +207,30 @@ function isKwField(f: TemplateField): boolean {
 }
 
 /**
- * Turns a 0-based rank among `total` candidates into a whole-week day
- * offset, optionally reversed. Shared by the KW-box defaults and the
- * Datumsreihe panels so "which page gets this week vs. next week" stays in
- * sync between them. `swap` exists because the mapping "page order = week
- * order" only holds half the time on an alternating rotation — some
- * fortnights the earlier page is actually next week's shift, not this
- * week's — and the app has no way to know that on its own.
+ * Turns a 0-based rank among candidates into a whole-week day offset.
+ * Shared by the KW-box defaults and the Datumsreihe panels so "which page
+ * gets which week" stays in sync between them.
+ *
+ * `groupSize` is how many ranked entries one Endlos-Modus block contributes
+ * (e.g. 2 for a Früh-/Spätschicht duplex sheet, 1 for a single-shift
+ * template) — `swap` reverses rank only *within* each block's own group
+ * instead of across the whole document. A page is a duplex sheet's front
+ * or back, and "page order = week order" only holds for half of an
+ * alternating rotation: some fortnights the front page is actually next
+ * week's shift, not this week's. Reversing globally (this function's first
+ * version) meant the *block a given week landed in* moved depending on
+ * total block count — with several Endlos-Modus blocks, "this week" could
+ * end up on the very last page, forcing a scroll past every other block to
+ * reach it. Swapping only within each block keeps the block-to-block
+ * progression (block 0 = the soonest weeks, block 1 = the next ones, …)
+ * identical either way — only which page within a given block gets the
+ * earlier of its weeks changes.
  */
-function weekOffsetForRank(rank: number, total: number, swap: boolean): number {
-  const effectiveRank = swap ? total - 1 - rank : rank;
-  return effectiveRank * 7;
+function weekOffsetForRank(rank: number, groupSize: number, swap: boolean): number {
+  if (!swap || groupSize <= 1) return rank * 7;
+  const blockIndex = Math.floor(rank / groupSize);
+  const withinBlock = rank % groupSize;
+  return (blockIndex * groupSize + (groupSize - 1 - withinBlock)) * 7;
 }
 
 /**
@@ -232,14 +245,18 @@ function weekOffsetForRank(rank: number, total: number, swap: boolean): number {
  * (see `StoredTemplate.autoCurrentWeek`), which re-applies this over the
  * draft on purpose.
  */
-function defaultKwValues(fields: TemplateField[], swap: boolean): Record<string, FieldValue> {
+function defaultKwValues(fields: TemplateField[], swap: boolean, weekBlocks: number): Record<string, FieldValue> {
   const kwFields = fields
     .filter(isKwField)
     .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
+  // How many KW fields one Endlos-Modus block contributes — always uniform
+  // across blocks, since every block is an exact repeat of the original
+  // field set. See weekOffsetForRank for why `swap` needs this.
+  const groupSize = kwFields.length / weekBlocks;
   const today = new Date();
   const out: Record<string, FieldValue> = {};
   kwFields.forEach((f, i) => {
-    const offsetDays = weekOffsetForRank(i, kwFields.length, swap);
+    const offsetDays = weekOffsetForRank(i, groupSize, swap);
     const { week } = isoWeekOf(new Date(today.getTime() + offsetDays * 86400000));
     out[f.id] = String(week).padStart(f.digitBoxes!, "0").slice(-f.digitBoxes!);
   });
@@ -255,11 +272,13 @@ function defaultKwValues(fields: TemplateField[], swap: boolean): Record<string,
  */
 function freshDateValues(
   dateGroupsByPage: { page: number; groups: LinkedGroup[] }[],
-  swap: boolean
+  swap: boolean,
+  weekBlocks: number
 ): Record<string, FieldValue> {
+  const groupSize = dateGroupsByPage.length / weekBlocks;
   const out: Record<string, FieldValue> = {};
   dateGroupsByPage.forEach(({ groups: pageGroups }, i) => {
-    const offsetDays = weekOffsetForRank(i, dateGroupsByPage.length, swap);
+    const offsetDays = weekOffsetForRank(i, groupSize, swap);
     const { year, week } = isoWeekOf(new Date(Date.now() + offsetDays * 86400000));
     const dates = isoWeekDates(year, week, pageGroups.length);
     pageGroups.forEach((g, j) => {
@@ -377,8 +396,8 @@ export default function FillForm({
 
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
     ...defaultStaticValues(effectiveFields),
-    ...defaultKwValues(effectiveFields, swapWeeks),
-    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
+    ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
+    ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks) : {}),
   }));
   const [sendEmail, setSendEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -436,8 +455,8 @@ export default function FillForm({
               if (!template.autoCurrentWeek) return merged;
               return {
                 ...merged,
-                ...defaultKwValues(effectiveFields, swapWeeksRef.current),
-                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current),
+                ...defaultKwValues(effectiveFields, swapWeeksRef.current, weekBlocks),
+                ...freshDateValues(dateGroupsByPage, swapWeeksRef.current, weekBlocks),
               };
             });
           }
@@ -466,8 +485,8 @@ export default function FillForm({
     setValues((v) => ({
       ...defaultStaticValues(effectiveFields),
       ...v,
-      ...defaultKwValues(effectiveFields, swapWeeks),
-      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks) : {}),
+      ...defaultKwValues(effectiveFields, swapWeeks, weekBlocks),
+      ...(template.autoCurrentWeek ? freshDateValues(dateGroupsByPage, swapWeeks, weekBlocks) : {}),
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWeeks, weekBlocks]);
@@ -794,7 +813,7 @@ export default function FillForm({
                           key={`${page}-${swapWeeks}`}
                           groups={pageGroups}
                           label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
-                          weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length, swapWeeks)}
+                          weekOffsetDays={weekOffsetForRank(i, dateGroupsByPage.length / weekBlocks, swapWeeks)}
                           onApply={setGroupValue}
                         />
                       ))}
