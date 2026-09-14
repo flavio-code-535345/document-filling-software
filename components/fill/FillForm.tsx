@@ -664,6 +664,12 @@ export default function FillForm({
     };
   }, [values, template.id]);
 
+  // Saves the current form `values` into whichever draft the dropdown below
+  // has picked (activeDraftId), or creates a new one if none is picked.
+  // Deliberately does *not* reset draftName/activeDraftId afterward — an
+  // earlier version cleared the name field on every successful save, which
+  // read as "the draft I just picked vanished" even though the save itself
+  // had worked and the dropdown still had it selected underneath.
   const saveDraft = async () => {
     const name = draftName.trim();
     if (!name || savingDraft) return;
@@ -684,7 +690,6 @@ export default function FillForm({
       if (!res.ok) throw new Error(data?.error || "Speichern fehlgeschlagen.");
       setSavedFills((list) => [data.fill, ...list.filter((f) => f.id !== data.fill.id)]);
       setActiveDraftId(data.fill.id);
-      setDraftName("");
     } catch (err) {
       setDraftError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
     } finally {
@@ -692,10 +697,29 @@ export default function FillForm({
     }
   };
 
-  const selectDraft = (fill: SavedFill) => {
-    setValues(fill.values ?? {});
-    setDraftName(fill.name);
-    setActiveDraftId(fill.id);
+  // Picking a draft from the dropdown only marks it as the current target
+  // for "Speichern"/"Löschen" and shows its name — it does *not* touch the
+  // form's values. Pulling in a draft's saved values is a separate,
+  // explicit "Laden" click (see loadActiveDraft), so browsing the dropdown
+  // to see what's there can never silently clobber whatever's currently
+  // being filled in.
+  const pickDraft = (id: string) => {
+    if (!id) {
+      deselectDraft();
+      return;
+    }
+    const draft = savedFills.find((f) => f.id === id);
+    if (!draft) return;
+    setActiveDraftId(draft.id);
+    setDraftName(draft.name);
+    setError(null);
+    setDraftError(null);
+  };
+
+  const loadActiveDraft = () => {
+    const draft = savedFills.find((f) => f.id === activeDraftId);
+    if (!draft) return;
+    setValues(draft.values ?? {});
     setError(null);
   };
 
@@ -827,70 +851,61 @@ export default function FillForm({
                   🗓 Tätigkeitsnachweis-Modus
                 </span>
               )}
-              {activeDraftId && (
-                <button
-                  type="button"
-                  className="ml-auto text-xs text-ink-dim hover:text-ink"
-                  onClick={deselectDraft}
-                >
-                  Auswahl aufheben
-                </button>
-              )}
             </div>
-            <div className="flex gap-2">
-              <input
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                placeholder="Entwurf benennen…"
+            {/* One dropdown to pick a draft, plus explicit Laden/Speichern/
+                Löschen buttons that act immediately on whatever's picked —
+                picking an entry never touches the form by itself (see
+                pickDraft), so browsing the list is always safe. */}
+            <div className="flex flex-wrap gap-2">
+              <select
+                value={activeDraftId ?? ""}
+                onChange={(e) => pickDraft(e.target.value)}
                 className="min-w-0 flex-1 rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
-              />
+              >
+                <option value="">— Neuer Entwurf —</option>
+                {savedFills.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                    {s.auto ? " · Auto" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!activeDraftId}
+                className="rounded-lg border border-line px-4 py-2 text-sm font-semibold text-ink hover:border-accent hover:text-accent disabled:opacity-40"
+                onClick={loadActiveDraft}
+                title="Die gespeicherten Werte dieses Entwurfs ins Formular laden"
+              >
+                Laden
+              </button>
               <button
                 type="button"
                 disabled={!draftName.trim() || savingDraft}
                 className="rounded-lg bg-accent-strong px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
                 onClick={() => void saveDraft()}
+                title="Die aktuellen Formularwerte in diesem Entwurf speichern"
               >
-                {savingDraft ? "Speichert…" : activeDraftId ? "Überschreiben" : "Speichern"}
+                {savingDraft ? "Speichert…" : "Speichern"}
               </button>
+              {activeDraftId && (
+                <button
+                  type="button"
+                  title="Entwurf löschen"
+                  className="rounded-lg border border-line px-3 py-2 text-sm text-red-400 hover:border-red-400"
+                  onClick={() => void deleteDraft(activeDraftId)}
+                >
+                  ✕
+                </button>
+              )}
             </div>
+            <input
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              placeholder="Entwurf benennen…"
+              className="mt-2 w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm focus:border-accent focus:outline-none"
+            />
             {draftError && <p className="mt-2 text-sm text-red-400">{draftError}</p>}
-            {savedFills.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {savedFills.map((s) => {
-                  const active = s.id === activeDraftId;
-                  return (
-                    <div
-                      key={s.id}
-                      className={`flex items-center gap-1 rounded-full border py-1 pl-3 pr-1 text-sm ${
-                        active ? "border-accent bg-accent/10" : "border-line bg-canvas"
-                      }`}
-                    >
-                      {s.auto && (
-                        <span className="rounded-full bg-accent/20 px-1.5 text-[10px] font-semibold uppercase text-accent">
-                          Auto
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        className={`truncate ${active ? "text-accent" : "hover:text-accent"}`}
-                        onClick={() => selectDraft(s)}
-                        title={`${s.name} — ${new Date(s.updatedAt).toLocaleString()}`}
-                      >
-                        {s.name}
-                      </button>
-                      <button
-                        type="button"
-                        title="Entwurf löschen"
-                        className="rounded-full px-1.5 text-red-400 hover:bg-surface-2"
-                        onClick={() => void deleteDraft(s.id)}
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
           </section>
 
           {/* Everything that shapes the document before you fill it in
