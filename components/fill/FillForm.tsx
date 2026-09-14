@@ -494,8 +494,54 @@ export default function FillForm({
   // selected (null = all) — lifted up from DateSeriesPanel so
   // Tätigkeitsnachweis-Modus's automatic refresh (freshDateValues) can see
   // the same exclusions instead of silently re-filling a field the panel
-  // says to leave alone.
+  // says to leave alone. Persisted to localStorage per template (same
+  // pattern as `swapWeeks` below) — "I don't work weekends" is a standing
+  // fact about how someone fills this template, not a one-off toggle for
+  // the current visit, so it needs to survive a reload; this used to be
+  // plain in-memory state that silently reset to "everything included" on
+  // every fresh page load, which is what made it look like the exclusion
+  // could never be saved. Starts empty (SSR-safe) and is restored from
+  // localStorage in an effect after mount — see the footgun this avoids in
+  // AGENTS.md ("never read localStorage in a lazy useState initializer").
   const [seriesByPage, setSeriesByPage] = useState<Record<number, Set<string> | null>>({});
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(`docflow:seriesByPage:${template.id}`);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Record<string, string[]>;
+      const restored: Record<number, Set<string> | null> = {};
+      for (const [page, keys] of Object.entries(parsed)) {
+        restored[Number(page)] = new Set(keys);
+      }
+      setSeriesByPage(restored);
+    } catch {
+      /* ignore */
+    }
+  }, [template.id]);
+  // Updates one page's selection and persists the whole map right away —
+  // only non-null (i.e. actually-excluded-something) entries are written,
+  // so a page nobody has touched doesn't bloat the stored JSON with an
+  // explicit "everything" that the default already means.
+  const setPageSelection = (page: number, next: Set<string> | null) => {
+    setSeriesByPage((prev) => {
+      const updated = { ...prev, [page]: next };
+      try {
+        const serializable: Record<number, string[]> = {};
+        for (const [p, set] of Object.entries(updated)) {
+          if (set) serializable[Number(p)] = [...set];
+        }
+        const key = `docflow:seriesByPage:${template.id}`;
+        if (Object.keys(serializable).length > 0) {
+          localStorage.setItem(key, JSON.stringify(serializable));
+        } else {
+          localStorage.removeItem(key);
+        }
+      } catch {
+        /* ignore */
+      }
+      return updated;
+    });
+  };
 
   // Which page rank is currently "the anchor slot" — the one whose panel
   // has a real, editable Jahr/KW input and whose value every other page in
@@ -1000,7 +1046,7 @@ export default function FillForm({
                             onAnchorChange={isAnchor ? setAnchorOverride : undefined}
                             onApply={setGroupValue}
                             selection={seriesByPage[page] ?? null}
-                            onSelectionChange={(next) => setSeriesByPage((prev) => ({ ...prev, [page]: next }))}
+                            onSelectionChange={(next) => setPageSelection(page, next)}
                           />
                         );
                       })}
