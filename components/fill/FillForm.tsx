@@ -490,6 +490,35 @@ export default function FillForm({
     // typed value already lands on the right page with no reset needed.
   };
 
+  // Chronological on-screen order: swapping can leave an earlier physical
+  // page (e.g. Seite 1) showing a *later* week than a later physical page
+  // (e.g. Seite 2) — see `weekOffsetForRank` — which reads backwards when
+  // the per-page sections and preview thumbnails are simply shown in
+  // physical page order. This reorders (and relabels) both purely for
+  // display: `displayOrder[i]` is the physical page shown at on-screen
+  // position `i`, and `displayPosition` is the inverse (physical page →
+  // the "Seite N" number shown for it). Nothing else changes — DOM ids,
+  // `jumpPreview`, `field.page`, the exported PDF, and the Datumsreihe
+  // panel's own "Seite N" labels all still refer to the real physical
+  // page, so scroll-linking and the download stay exactly matched to the
+  // underlying document; only which section/thumbnail appears first, and
+  // what it's labeled, changes.
+  const displayOrder = useMemo(() => {
+    const pages = Array.from({ length: effectivePageCount }, (_, i) => i);
+    return [...pages].sort((a, b) => {
+      const rankA = weekPageRank.get(a);
+      const rankB = weekPageRank.get(b);
+      const keyA = rankA !== undefined ? weekOffsetForRank(rankA, weekGroupSize, swapWeeks) : a;
+      const keyB = rankB !== undefined ? weekOffsetForRank(rankB, weekGroupSize, swapWeeks) : b;
+      return keyA - keyB;
+    });
+  }, [effectivePageCount, weekPageRank, weekGroupSize, swapWeeks]);
+  const displayPosition = useMemo(() => {
+    const map = new Map<number, number>();
+    displayOrder.forEach((page, i) => map.set(page, i + 1));
+    return map;
+  }, [displayOrder]);
+
   // Which of a page's date fields the Datumsreihe panel's checkboxes have
   // selected (null = all) — lifted up from DateSeriesPanel so
   // Tätigkeitsnachweis-Modus's automatic refresh (freshDateValues) can see
@@ -1057,12 +1086,13 @@ export default function FillForm({
             )}
           </section>
 
-          {pageLayouts.map((layout, pageIndex) => {
-            if (layout.general.length === 0 && layout.days.length === 0) return null;
+          {displayOrder.map((pageIndex) => {
+            const layout = pageLayouts[pageIndex];
+            if (!layout || (layout.general.length === 0 && layout.days.length === 0)) return null;
             return (
               <section key={pageIndex} className="rounded-xl border border-line bg-surface p-4">
                 <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-ink-dim">
-                  Seite {pageIndex + 1}
+                  Seite {displayPosition.get(pageIndex)}
                 </h2>
 
                 {layout.general.length > 0 && (
@@ -1165,7 +1195,7 @@ export default function FillForm({
         {/* Sticky preview column: the real PDF with filled values on top */}
         <div className="hidden lg:block">
           <div className="sticky top-24 space-y-6 self-start">
-            {Array.from({ length: effectivePageCount }, (_, i) => {
+            {displayOrder.map((i) => {
               // Beyond the template's own pageCount, a virtual page is just
               // the same underlying PDF page rendered again — the file on
               // disk was never expanded, only the field list was (locally).
@@ -1177,7 +1207,7 @@ export default function FillForm({
                   className="overflow-hidden rounded-lg border border-line"
                 >
                   <p className="border-b border-line bg-surface px-3 py-1 text-xs text-ink-dim">
-                    Seite {i + 1}
+                    Seite {displayPosition.get(i)}
                   </p>
                   <PagePreview
                     pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
