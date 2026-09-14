@@ -492,17 +492,17 @@ export default function FillForm({
 
   // Chronological on-screen order: swapping can leave an earlier physical
   // page (e.g. Seite 1) showing a *later* week than a later physical page
-  // (e.g. Seite 2) — see `weekOffsetForRank` — which reads backwards when
-  // the per-page sections and preview thumbnails are simply shown in
-  // physical page order. This reorders (and relabels) both purely for
-  // display: `displayOrder[i]` is the physical page shown at on-screen
-  // position `i`, and `displayPosition` is the inverse (physical page →
-  // the "Seite N" number shown for it). Nothing else changes — DOM ids,
-  // `jumpPreview`, `field.page`, the exported PDF, and the Datumsreihe
-  // panel's own "Seite N" labels all still refer to the real physical
-  // page, so scroll-linking and the download stay exactly matched to the
-  // underlying document; only which section/thumbnail appears first, and
-  // what it's labeled, changes.
+  // (e.g. Seite 2) — see `weekOffsetForRank` — which reads backwards
+  // wherever pages are shown in physical order: the per-page form
+  // sections, the preview thumbnails, and the Datumsreihe panels (which use
+  // this same map for their own "Seite N" labels and rendering order — see
+  // its render loop below). `displayOrder[i]` is the physical page shown at
+  // on-screen position `i`, and `displayPosition` is the inverse (physical
+  // page → the "Seite N" number shown for it) — purely a display/labeling
+  // concern. Nothing about the underlying data changes: DOM ids,
+  // `jumpPreview`, `field.page`, and the exported PDF all still refer to
+  // (and export in) the real physical page order; only what a human reads
+  // on screen, and what it's labeled, changes.
   const displayOrder = useMemo(() => {
     const pages = Array.from({ length: effectivePageCount }, (_, i) => i);
     return [...pages].sort((a, b) => {
@@ -582,9 +582,12 @@ export default function FillForm({
   const anchorPageRank = swapWeeks && weekGroupSize > 1 ? weekGroupSize - 1 : 0;
   // The physical page currently holding the anchor slot, purely for the
   // "folgt Seite N" label on every other panel — swapping can move this to
-  // a page other than the very first one.
+  // a page other than the very first one. Uses `displayPosition` (the same
+  // chronological on-screen numbering the Datumsreihe panels themselves are
+  // now ordered by), not the raw physical page, so this label always
+  // matches whatever's actually printed above it as "Seite N".
   const anchorPage = dateGroupsByPage.find(({ page }) => weekPageRank.get(page) === anchorPageRank)?.page;
-  const anchorLabel = `Seite ${(anchorPage ?? 0) + 1}`;
+  const anchorLabel = `Seite ${displayPosition.get(anchorPage ?? 0) ?? (anchorPage ?? 0) + 1}`;
   // Unlike the anchor's page, its *default value* (before the admin has
   // typed anything) is just today's actual week — it no longer needs its
   // own swap adjustment, since swap already moved which page is asking.
@@ -1046,39 +1049,53 @@ export default function FillForm({
                       )}
                     </div>
                     <div className="space-y-5">
-                      {dateGroupsByPage.map(({ page, groups: pageGroups }, i) => {
-                        // Which panel is the anchor moves with `swapWeeks`
-                        // (see `anchorPageRank`) — it's no longer always the
-                        // very first panel — so every panel must check its
-                        // own rank against it, not just compare `i === 0`.
-                        // The rank comes from the shared `weekPageRank` (not
-                        // this map's own index `i`), the same one the KW
-                        // boxes use, so a page's panel and its own KW
-                        // field(s) always land on the same week.
-                        const rank = weekPageRank.get(page) ?? i;
-                        const isAnchor = rank === anchorPageRank;
-                        // Only used for non-anchor panels below (the anchor
-                        // panel shows the raw, possibly-still-being-typed
-                        // anchorYear/anchorWeek directly, not this derived
-                        // value), so it's fine to always compute it from the
-                        // validated `safeAnchor`.
-                        const panelWeek = weekForRank(rank, weekGroupSize, swapWeeks, safeAnchor);
-                        return (
-                          <DateSeriesPanel
-                            key={`${page}-${swapWeeks}`}
-                            groups={pageGroups}
-                            label={dateGroupsByPage.length > 1 ? `Seite ${page + 1}` : undefined}
-                            year={isAnchor ? anchorYear : String(panelWeek.year)}
-                            week={isAnchor ? anchorWeek : String(panelWeek.week)}
-                            isAnchor={isAnchor}
-                            anchorLabel={anchorLabel}
-                            onAnchorChange={isAnchor ? setAnchorOverride : undefined}
-                            onApply={setGroupValue}
-                            selection={seriesByPage[page] ?? null}
-                            onSelectionChange={(next) => setPageSelection(page, next)}
-                          />
-                        );
-                      })}
+                      {/* Rendered in the same chronological order as the
+                          on-screen fill sections/previews (`displayOrder`),
+                          not physical page order — otherwise this panel
+                          would still read "Seite 1 = KW 39" above "Seite 2 =
+                          KW 38" under swap, exactly the backwards reading
+                          the fill-form reorder was meant to fix, just one
+                          section higher up. */}
+                      {[...dateGroupsByPage]
+                        .sort((a, b) => (displayPosition.get(a.page) ?? 0) - (displayPosition.get(b.page) ?? 0))
+                        .map(({ page, groups: pageGroups }, i) => {
+                          // Which panel is the anchor moves with `swapWeeks`
+                          // (see `anchorPageRank`) — it's no longer always
+                          // the very first panel — so every panel must check
+                          // its own rank against it, not just compare
+                          // `i === 0`. The rank comes from the shared
+                          // `weekPageRank` (not this map's own index `i`,
+                          // which is now a *display* position anyway), the
+                          // same one the KW boxes use, so a page's panel and
+                          // its own KW field(s) always land on the same week.
+                          const rank = weekPageRank.get(page) ?? i;
+                          const isAnchor = rank === anchorPageRank;
+                          // Only used for non-anchor panels below (the anchor
+                          // panel shows the raw, possibly-still-being-typed
+                          // anchorYear/anchorWeek directly, not this derived
+                          // value), so it's fine to always compute it from the
+                          // validated `safeAnchor`.
+                          const panelWeek = weekForRank(rank, weekGroupSize, swapWeeks, safeAnchor);
+                          return (
+                            <DateSeriesPanel
+                              key={`${page}-${swapWeeks}`}
+                              groups={pageGroups}
+                              label={
+                                dateGroupsByPage.length > 1
+                                  ? `Seite ${displayPosition.get(page) ?? page + 1}`
+                                  : undefined
+                              }
+                              year={isAnchor ? anchorYear : String(panelWeek.year)}
+                              week={isAnchor ? anchorWeek : String(panelWeek.week)}
+                              isAnchor={isAnchor}
+                              anchorLabel={anchorLabel}
+                              onAnchorChange={isAnchor ? setAnchorOverride : undefined}
+                              onApply={setGroupValue}
+                              selection={seriesByPage[page] ?? null}
+                              onSelectionChange={(next) => setPageSelection(page, next)}
+                            />
+                          );
+                        })}
                     </div>
                   </div>
                 )}
