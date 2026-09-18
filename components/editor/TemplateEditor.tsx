@@ -34,6 +34,36 @@ const TOOLS: { kind: FieldKind; label: string; icon: string }[] = [
 
 export type ToolId = FieldKind | "ai-region" | "zoom-area";
 
+/** Every `TemplateField` property the Massen-Tagging panel can copy from the
+ * anchor field onto the rest of the selection. `x`/`y` also get their own
+ * direct-set + nudge controls (a bulk move doesn't always have a
+ * convenient anchor field already sitting at the target position).
+ * Deliberately excludes `id`, `label`, `kind`, `page` (page has its own
+ * dedicated bulk move; copying `kind`/`label` across dissimilar fields
+ * would silently invalidate kind-specific properties like
+ * `matrixRows`/`digitBoxes`), `formula`/`linkKey` (each field's own
+ * identity/computation, never a "match the neighbor" concept), and
+ * matrix-grid geometry (its own dedicated fine-tuning tool in the
+ * Inspector, not a bulk one). */
+export type BulkMatchKey =
+  | "width"
+  | "height"
+  | "x"
+  | "y"
+  | "fontSize"
+  | "align"
+  | "valign"
+  | "overflow"
+  | "fontFamily"
+  | "fontWeight"
+  | "fontStyle"
+  | "textColor"
+  | "digitBoxes"
+  | "required"
+  | "disabled"
+  | "inFileName"
+  | "defaultValue";
+
 export interface PageRegion {
   x: number;
   y: number;
@@ -350,12 +380,14 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     [multiSelect]
   );
 
-  // Bulk tagging: match a dimension of every multi-selected field to the
-  // anchor field (the last one clicked, i.e. `selected`).
-  const matchDimension = useCallback(
-    (dim: "width" | "height" | "fontSize" | "x" | "y") => {
+  // Bulk tagging: match a property of every multi-selected field to the
+  // anchor field (the last one clicked, i.e. `selected`) — covers every
+  // TemplateField property it makes sense to copy across a selection, not
+  // just the original geometry dimensions.
+  const matchProperty = useCallback(
+    (key: BulkMatchKey) => {
       if (!selected) return;
-      applyBulk({ [dim]: selected[dim] } as Partial<TemplateField>);
+      applyBulk({ [key]: selected[key] } as Partial<TemplateField>);
     },
     [selected, applyBulk]
   );
@@ -366,6 +398,43 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
     },
     [applyBulk]
   );
+
+  // Shifts every multi-selected field's position by the same delta —
+  // e.g. nudging a whole row of fields down 1pt at once instead of
+  // reopening each one in the Inspector.
+  const nudgeSelected = useCallback(
+    (dx: number, dy: number) => {
+      if (multiSelect.length < 2) return;
+      setFields((fs) =>
+        fs.map((f) => (multiSelect.includes(f.id) ? { ...f, x: f.x + dx, y: f.y + dy } : f))
+      );
+      setDirty(true);
+    },
+    [multiSelect]
+  );
+
+  const moveSelectedToPage = useCallback(
+    (page: number) => {
+      if (multiSelect.length < 2) return;
+      const clamped = clampPageIndex(page, pageCount);
+      setFields((fs) => fs.map((f) => (multiSelect.includes(f.id) ? { ...f, page: clamped } : f)));
+      setDirty(true);
+    },
+    [multiSelect, pageCount]
+  );
+
+  // ---- selection helpers for the Massen-Tagging panel ----
+  const selectAllOnPage = useCallback(() => {
+    setMultiSelect(fields.filter((f) => f.page === pageIndex).map((f) => f.id));
+  }, [fields, pageIndex]);
+
+  const selectAllFields = useCallback(() => {
+    setMultiSelect(fields.map((f) => f.id));
+  }, [fields]);
+
+  const invertMultiSelect = useCallback(() => {
+    setMultiSelect((ms) => fields.filter((f) => !ms.includes(f.id)).map((f) => f.id));
+  }, [fields]);
 
   // ---- stamping ----
   const handlePageClick = useCallback(
@@ -1028,11 +1097,18 @@ export default function TemplateEditor({ template }: { template: StoredTemplate 
         <MultiSelectPanel
           fields={fields}
           pageIndex={pageIndex}
+          pageCount={pageCount}
           multiSelect={multiSelect}
           anchorId={selectedId}
           onToggle={(id) => toggleMulti(id, true)}
           onClear={clearMulti}
-          onMatch={matchDimension}
+          onSelectPage={selectAllOnPage}
+          onSelectAll={selectAllFields}
+          onInvert={invertMultiSelect}
+          onMatch={matchProperty}
+          onApply={applyBulk}
+          onNudge={nudgeSelected}
+          onMovePage={moveSelectedToPage}
         />
       )}
     </div>
@@ -1082,92 +1158,312 @@ function GroupButton({
   );
 }
 
+/** Anchor-match buttons offered in the panel, grouped for readability. Each
+ * entry's `key` is copied from the anchor field onto every other selected
+ * field — see `BulkMatchKey`. */
+const MATCH_GROUPS: { title: string; items: { key: BulkMatchKey; label: string }[] }[] = [
+  {
+    title: "Geometrie",
+    items: [
+      { key: "width", label: "Breite" },
+      { key: "height", label: "Höhe" },
+      { key: "x", label: "X" },
+      { key: "y", label: "Y" },
+    ],
+  },
+  {
+    title: "Typografie",
+    items: [
+      { key: "fontSize", label: "Schriftgröße" },
+      { key: "fontFamily", label: "Schriftart" },
+      { key: "fontWeight", label: "Schriftschnitt" },
+      { key: "fontStyle", label: "Stil" },
+      { key: "textColor", label: "Farbe" },
+      { key: "align", label: "Ausrichtung (h)" },
+      { key: "valign", label: "Ausrichtung (v)" },
+      { key: "overflow", label: "Überlauf" },
+      { key: "digitBoxes", label: "Ziffernboxen" },
+    ],
+  },
+  {
+    title: "Verhalten",
+    items: [
+      { key: "required", label: "Pflichtfeld" },
+      { key: "disabled", label: "Deaktiviert" },
+      { key: "inFileName", label: "Im Dateinamen" },
+      { key: "defaultValue", label: "Standardwert" },
+    ],
+  },
+];
+
+const NUDGE_STEPS = [1, 5, 10];
+
 function MultiSelectPanel({
   fields,
   pageIndex,
+  pageCount,
   multiSelect,
   anchorId,
   onToggle,
   onClear,
+  onSelectPage,
+  onSelectAll,
+  onInvert,
   onMatch,
+  onApply,
+  onNudge,
+  onMovePage,
 }: {
   fields: TemplateField[];
   pageIndex: number;
+  pageCount: number;
   multiSelect: string[];
   anchorId: string | null;
   onToggle: (id: string) => void;
   onClear: () => void;
-  onMatch: (dim: "width" | "height" | "fontSize" | "x" | "y") => void;
+  onSelectPage: () => void;
+  onSelectAll: () => void;
+  onInvert: () => void;
+  onMatch: (key: BulkMatchKey) => void;
+  onApply: (patch: Partial<TemplateField>) => void;
+  onNudge: (dx: number, dy: number) => void;
+  onMovePage: (page: number) => void;
 }) {
-  const pageFields = fields.filter((f) => f.page === pageIndex);
+  // "Alle Seiten" is what actually unlocks the "mass" in Massen-Tagging —
+  // without it the picker only ever showed the page you happen to be
+  // looking at, so matching e.g. font size across a duplex sheet's two
+  // pages meant flipping pages, re-opening this panel, and redoing the
+  // selection each time.
+  const [showAllPages, setShowAllPages] = useState(false);
+  const [nudgeStep, setNudgeStep] = useState(NUDGE_STEPS[0]);
+  const [direct, setDirect] = useState<Record<"width" | "height" | "fontSize" | "x" | "y", string>>({
+    width: "",
+    height: "",
+    fontSize: "",
+    x: "",
+    y: "",
+  });
+  const [movePage, setMovePage] = useState("");
+
+  const listedFields = showAllPages ? fields : fields.filter((f) => f.page === pageIndex);
   const anchor = fields.find((f) => f.id === anchorId) ?? null;
   const canMatch = multiSelect.length >= 2 && anchor && multiSelect.includes(anchor.id);
+  const canBulk = multiSelect.length >= 2;
+
+  const applyDirect = () => {
+    const patch: Partial<TemplateField> = {};
+    (Object.keys(direct) as (keyof typeof direct)[]).forEach((key) => {
+      const raw = direct[key].trim();
+      if (raw === "") return;
+      const n = Number(raw);
+      if (Number.isFinite(n)) patch[key] = n;
+    });
+    if (Object.keys(patch).length === 0) return;
+    onApply(patch);
+    setDirect({ width: "", height: "", fontSize: "", x: "", y: "" });
+  };
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-72 rounded-xl border border-line bg-surface p-3 shadow-xl">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="fixed bottom-4 right-4 z-40 flex max-h-[85vh] w-80 flex-col rounded-xl border border-line bg-surface shadow-xl">
+      <div className="flex items-center justify-between border-b border-line px-3 py-2">
         <span className="text-sm font-semibold">Massen-Tagging</span>
         <button className="text-xs text-ink-dim hover:text-ink" onClick={onClear}>
           Auswahl leeren
         </button>
       </div>
-      <div className="mb-2 max-h-40 space-y-1 overflow-auto">
-        {pageFields.map((f) => (
-          <label
-            key={f.id}
-            className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-surface-2"
-          >
-            <input
-              type="checkbox"
-              checked={multiSelect.includes(f.id)}
-              onChange={() => onToggle(f.id)}
-            />
-            <span className="truncate">{f.label || f.id}</span>
-            {f.id === anchorId && (
-              <span className="ml-auto shrink-0 text-[10px] uppercase text-accent">Anker</span>
-            )}
-          </label>
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="inline-flex rounded-lg border border-line p-0.5 text-xs">
+            <button
+              className={`rounded-md px-2 py-1 ${!showAllPages ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"}`}
+              onClick={() => setShowAllPages(false)}
+            >
+              Diese Seite
+            </button>
+            <button
+              className={`rounded-md px-2 py-1 ${showAllPages ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"}`}
+              onClick={() => setShowAllPages(true)}
+            >
+              Alle Seiten
+            </button>
+          </div>
+          <div className="flex gap-1 text-xs">
+            <button className="text-accent hover:underline" onClick={onSelectPage}>
+              Seite
+            </button>
+            <button className="text-accent hover:underline" onClick={onSelectAll}>
+              Alle
+            </button>
+            <button className="text-ink-dim hover:underline" onClick={onInvert}>
+              Umkehren
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-40 space-y-1 overflow-auto rounded-lg border border-line/60 p-1">
+          {listedFields.length === 0 && (
+            <p className="p-1.5 text-xs text-ink-dim">Keine Felder auf dieser Seite.</p>
+          )}
+          {listedFields.map((f) => (
+            <label
+              key={f.id}
+              className="flex items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-surface-2"
+            >
+              <input
+                type="checkbox"
+                checked={multiSelect.includes(f.id)}
+                onChange={() => onToggle(f.id)}
+              />
+              {showAllPages && (
+                <span className="shrink-0 text-[10px] text-ink-dim">S{f.page + 1}</span>
+              )}
+              <span className="truncate">{f.label || f.id}</span>
+              {f.id === anchorId && (
+                <span className="ml-auto shrink-0 text-[10px] uppercase text-accent">Anker</span>
+              )}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-ink-dim">
+          Wählen Sie mind. 2 Felder; das zuletzt ausgewählte Feld ist der Anker.
+        </p>
+
+        {MATCH_GROUPS.map((group) => (
+          <div key={group.title} className="space-y-1 border-t border-line pt-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+              {group.title} angleichen
+            </span>
+            <div className="flex flex-wrap gap-1">
+              {group.items.map((item) => (
+                <button
+                  key={item.key}
+                  className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+                  disabled={!canMatch}
+                  onClick={() => onMatch(item.key)}
+                  title={`${item.label} des Ankers auf die Auswahl übertragen`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
         ))}
-      </div>
-      <p className="mb-2 text-xs text-ink-dim">
-        Wählen Sie mind. 2 Felder; das zuletzt in der Liste ausgewählte Feld ist der Anker.
-      </p>
-      <div className="flex flex-wrap gap-1">
-        <button
-          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
-          disabled={!canMatch}
-          onClick={() => onMatch("width")}
-        >
-          Breite angleichen
-        </button>
-        <button
-          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
-          disabled={!canMatch}
-          onClick={() => onMatch("height")}
-        >
-          Höhe angleichen
-        </button>
-        <button
-          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
-          disabled={!canMatch}
-          onClick={() => onMatch("fontSize")}
-        >
-          Schriftgröße angleichen
-        </button>
-        <button
-          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
-          disabled={!canMatch}
-          onClick={() => onMatch("x")}
-        >
-          X angleichen
-        </button>
-        <button
-          className="rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
-          disabled={!canMatch}
-          onClick={() => onMatch("y")}
-        >
-          Y angleichen
-        </button>
+
+        <div className="space-y-1.5 border-t border-line pt-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+            Direkt setzen (ohne Anker)
+          </span>
+          <div className="grid grid-cols-5 gap-1">
+            {(["width", "height", "fontSize", "x", "y"] as const).map((key) => (
+              <input
+                key={key}
+                type="number"
+                placeholder={{ width: "B", height: "H", fontSize: "Sz", x: "X", y: "Y" }[key]}
+                title={{ width: "Breite", height: "Höhe", fontSize: "Schriftgröße", x: "X", y: "Y" }[key]}
+                value={direct[key]}
+                onChange={(e) => setDirect((d) => ({ ...d, [key]: e.target.value }))}
+                className="w-full min-w-0 rounded-md border border-line bg-canvas px-1 py-1 text-xs"
+              />
+            ))}
+          </div>
+          <button
+            className="w-full rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+            disabled={!canBulk}
+            onClick={applyDirect}
+            title="Nur ausgefüllte Felder werden übernommen"
+          >
+            Anwenden
+          </button>
+        </div>
+
+        <div className="space-y-1.5 border-t border-line pt-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+            Verschieben
+          </span>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-line p-0.5 text-xs">
+              {NUDGE_STEPS.map((step) => (
+                <button
+                  key={step}
+                  className={`rounded-md px-1.5 py-0.5 ${
+                    nudgeStep === step ? "bg-accent/20 text-accent" : "text-ink-dim hover:text-ink"
+                  }`}
+                  onClick={() => setNudgeStep(step)}
+                >
+                  {step}pt
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-0.5">
+              <span />
+              <button
+                className="rounded-md border border-line px-1.5 py-0.5 text-xs hover:border-accent disabled:opacity-40"
+                disabled={!canBulk}
+                onClick={() => onNudge(0, -nudgeStep)}
+                title={`Um ${nudgeStep}pt nach oben`}
+              >
+                ↑
+              </button>
+              <span />
+              <button
+                className="rounded-md border border-line px-1.5 py-0.5 text-xs hover:border-accent disabled:opacity-40"
+                disabled={!canBulk}
+                onClick={() => onNudge(-nudgeStep, 0)}
+                title={`Um ${nudgeStep}pt nach links`}
+              >
+                ←
+              </button>
+              <span />
+              <button
+                className="rounded-md border border-line px-1.5 py-0.5 text-xs hover:border-accent disabled:opacity-40"
+                disabled={!canBulk}
+                onClick={() => onNudge(nudgeStep, 0)}
+                title={`Um ${nudgeStep}pt nach rechts`}
+              >
+                →
+              </button>
+              <span />
+              <button
+                className="rounded-md border border-line px-1.5 py-0.5 text-xs hover:border-accent disabled:opacity-40"
+                disabled={!canBulk}
+                onClick={() => onNudge(0, nudgeStep)}
+                title={`Um ${nudgeStep}pt nach unten`}
+              >
+                ↓
+              </button>
+              <span />
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-1.5 border-t border-line pt-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-dim">
+            Auf Seite verschieben
+          </span>
+          <div className="flex gap-1">
+            <input
+              type="number"
+              min={1}
+              max={pageCount}
+              placeholder={`1–${pageCount}`}
+              value={movePage}
+              onChange={(e) => setMovePage(e.target.value)}
+              className="w-20 rounded-md border border-line bg-canvas px-2 py-1 text-xs"
+            />
+            <button
+              className="flex-1 rounded-md border border-line px-2 py-1 text-xs hover:border-accent disabled:opacity-40"
+              disabled={!canBulk || !movePage.trim()}
+              onClick={() => {
+                const n = Number(movePage);
+                if (Number.isFinite(n)) onMovePage(Math.round(n) - 1);
+                setMovePage("");
+              }}
+            >
+              Verschieben
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
