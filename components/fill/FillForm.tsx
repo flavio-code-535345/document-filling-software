@@ -394,7 +394,16 @@ export default function FillForm({
   );
   const effectivePageCount = template.pageCount * weekBlocks;
 
-  const groups = useMemo(() => groupFields(effectiveFields), [effectiveFields]);
+  // Fields an admin has switched off in the editor ("Deaktiviert") are kept
+  // in `effectiveFields` (so a formula on an *active* field can still
+  // reference a disabled one — a disabled field isn't "gone", just not
+  // shown to whoever's filling this in) but excluded from everything that
+  // actually renders, validates, or previews the form: grouping, the
+  // Datumsreihe/KW cascade, and the live PDF preview all read from this
+  // instead of `effectiveFields` directly.
+  const visibleFields = useMemo(() => effectiveFields.filter((f) => !f.disabled), [effectiveFields]);
+
+  const groups = useMemo(() => groupFields(visibleFields), [visibleFields]);
   const dateGroups = useMemo(
     () => groups.filter((g) => g.fields[0].kind === "date"),
     [groups]
@@ -425,9 +434,9 @@ export default function FillForm({
   const weekPages = useMemo(() => {
     const pages = new Set<number>();
     for (const { page } of dateGroupsByPage) pages.add(page);
-    for (const f of effectiveFields) if (isKwField(f)) pages.add(f.page);
+    for (const f of visibleFields) if (isKwField(f)) pages.add(f.page);
     return [...pages].sort((a, b) => a - b);
-  }, [dateGroupsByPage, effectiveFields]);
+  }, [dateGroupsByPage, visibleFields]);
   const weekPageRank = useMemo(() => new Map(weekPages.map((p, i) => [p, i])), [weekPages]);
   // How many week-pages one Endlos-Modus block contributes — always uniform
   // across blocks, since every block is an exact repeat of the original
@@ -608,8 +617,8 @@ export default function FillForm({
       : defaultAnchor;
 
   const [values, setValues] = useState<Record<string, FieldValue>>(() => ({
-    ...defaultStaticValues(effectiveFields),
-    ...defaultKwValues(effectiveFields, swapWeeks, weekPageRank, weekGroupSize, safeAnchor),
+    ...defaultStaticValues(visibleFields),
+    ...defaultKwValues(visibleFields, swapWeeks, weekPageRank, weekGroupSize, safeAnchor),
     ...(template.autoCurrentWeek
       ? freshDateValues(dateGroupsByPage, swapWeeks, weekPageRank, weekGroupSize, safeAnchor, seriesByPage)
       : {}),
@@ -670,7 +679,7 @@ export default function FillForm({
               if (!template.autoCurrentWeek) return merged;
               return {
                 ...merged,
-                ...defaultKwValues(effectiveFields, swapWeeksRef.current, weekPageRank, weekGroupSize, safeAnchor),
+                ...defaultKwValues(visibleFields, swapWeeksRef.current, weekPageRank, weekGroupSize, safeAnchor),
                 ...freshDateValues(
                   dateGroupsByPage,
                   swapWeeksRef.current,
@@ -707,9 +716,9 @@ export default function FillForm({
   // own edit); only fields with no entry at all pick up their default here.
   useEffect(() => {
     setValues((v) => ({
-      ...defaultStaticValues(effectiveFields),
+      ...defaultStaticValues(visibleFields),
       ...v,
-      ...defaultKwValues(effectiveFields, swapWeeks, weekPageRank, weekGroupSize, safeAnchor),
+      ...defaultKwValues(visibleFields, swapWeeks, weekPageRank, weekGroupSize, safeAnchor),
       ...(template.autoCurrentWeek
         ? freshDateValues(dateGroupsByPage, swapWeeks, weekPageRank, weekGroupSize, safeAnchor, seriesByPage)
         : {}),
@@ -1230,7 +1239,7 @@ export default function FillForm({
                     pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
                     pageIndex={sourcePage}
                     pageSize={template.pageSizes[sourcePage] ?? { width: 612, height: 792 }}
-                    fields={effectiveFields.filter((f) => f.page === i)}
+                    fields={visibleFields.filter((f) => f.page === i)}
                     values={previewValues}
                     rotation={template.pageRotations?.[sourcePage] ?? 0}
                   />

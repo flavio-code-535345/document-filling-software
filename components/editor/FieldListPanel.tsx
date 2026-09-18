@@ -55,7 +55,7 @@ export default function FieldListPanel({
                   : invalid
                     ? "border-red-500/50"
                     : "border-line"
-              }`}
+              } ${f.disabled ? "opacity-50" : ""}`}
             >
               <div className="flex items-center gap-1">
                 <button
@@ -78,6 +78,9 @@ export default function FieldListPanel({
                   >
                     {f.page + 1}.
                   </span>{" "}
+                  {f.disabled && (
+                    <span title="Deaktiviert — im Ausfüllformular ausgeblendet">🚫 </span>
+                  )}
                   {f.label || "?"}{" "}
                   <span className="text-xs text-ink-dim">({f.kind})</span>
                 </button>
