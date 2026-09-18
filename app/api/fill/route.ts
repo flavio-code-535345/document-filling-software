@@ -58,9 +58,11 @@ export async function POST(req: Request) {
       pdfBytes = await expandPdfPages(pdfBytes, stored.pageCount, times);
     }
 
-    // Server-side required validation: every required field must have a value.
+    // Server-side required validation: every required field must have a
+    // value — except a disabled one, which the fill form never even shows,
+    // so it can never have collected a value for the admin to require.
     const missing = template.fields.find(
-      (f) => f.required && isEmpty(values[f.id])
+      (f) => f.required && !f.disabled && isEmpty(values[f.id])
     );
     if (missing) {
       return jsonError(`Bitte fülle das Feld „${missing.label || "?"}" aus.`, 400);

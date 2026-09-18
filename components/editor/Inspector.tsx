@@ -263,6 +263,18 @@ export default function Inspector({
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"
+            checked={Boolean(field.disabled)}
+            onChange={(e) => onPatch({ disabled: e.target.checked ? true : undefined })}
+          />
+          Deaktiviert
+          <span className="text-xs text-ink-dim" title="Ausgeblendet im Ausfüllformular und in der exportierten PDF — Platzierung bleibt erhalten.">
+            (im Formular ausgeblendet)
+          </span>
+        </label>
+
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
             checked={field.required}
             onChange={(e) => onPatch({ required: e.target.checked })}
           />

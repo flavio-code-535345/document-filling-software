@@ -108,6 +108,12 @@ export async function fillPdf(
   const computedValues = evaluateFormulas(template.fields, values);
 
   for (const field of template.fields) {
+    // Deactivated fields keep their placement in the template (so
+    // re-enabling is instant) but never print — same list is still passed
+    // to evaluateFormulas above, so a disabled field can keep computing a
+    // value that an *active* field's formula references, it just never
+    // gets drawn itself.
+    if (field.disabled) continue;
     const page = pages[field.page];
     if (!page) continue;
     const value = computedValues[field.id];
@@ -266,6 +272,6 @@ export function buildFilenameParts(
 ): { label: string; value: string }[] {
   const computed = evaluateFormulas(template.fields, values);
   return template.fields
-    .filter((f) => f.inFileName)
+    .filter((f) => f.inFileName && !f.disabled)
     .map((f) => ({ label: f.label, value: String(computed[f.id] ?? "") }));
 }

@@ -30,6 +30,13 @@ export interface TemplateField {
   height: number;
   fontSize: number;
   required: boolean;
+  /**
+   * Excludes this field from the fill form entirely (not rendered, not
+   * validated, not exported/printed) while keeping its placement saved on
+   * the PDF page — a soft "turn this off for now" that's instantly
+   * reversible, as opposed to deleting the field outright.
+   */
+  disabled?: boolean;
   /** Include this field's value in the output filename */
   inFileName?: boolean;
   /** Horizontal text alignment within the field box. */

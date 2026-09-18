@@ -464,6 +464,12 @@ export default function PdfPageView({
                   top: displayY,
                   width: box.width * zoom,
                   height: box.height * zoom,
+                  // Deactivated fields stay editable (still draggable,
+                  // resizable, selectable — re-enabling is one checkbox
+                  // away) but read as visibly "off" so an admin scanning
+                  // the page doesn't mistake one for an active field with
+                  // nothing filled in yet.
+                  opacity: f.disabled && !isFocused ? 0.4 : 1,
                 }}
                 onMouseEnter={() => setHoveredId(f.id)}
                 onMouseLeave={() => setHoveredId((h) => (h === f.id ? null : h))}
@@ -471,7 +477,7 @@ export default function PdfPageView({
                 <div
                   className="pointer-events-none absolute inset-0"
                   style={{
-                    border: `${Math.max(1, f.id === selectedId ? 2 : 1)}px solid ${
+                    border: `${Math.max(1, f.id === selectedId ? 2 : 1)}px ${f.disabled ? "dashed" : "solid"} ${
                       f.id === selectedId
                         ? "#ffffff"
                         : isMulti
@@ -525,11 +531,12 @@ export default function PdfPageView({
                 {showLabel && (
                   <span
                     className="pointer-events-none absolute"
+                    title={f.disabled ? "Deaktiviert — im Ausfüllformular ausgeblendet" : undefined}
                     style={{
                       top: -18,
                       left: -1,
                       fontSize: Math.max(10, 12 * Math.min(1.2, zoom)),
-                      background: KIND_COLORS[f.kind],
+                      background: f.disabled ? "#6b7280" : KIND_COLORS[f.kind],
                       color: "#0b1220",
                       padding: "1px 5px",
                       borderRadius: 4,
@@ -552,6 +559,7 @@ export default function PdfPageView({
                       zIndex: isFocused ? 20 : 1,
                     }}
                   >
+                    {f.disabled ? "🚫 " : ""}
                     {f.label || "?"}
                   </span>
                 )}
