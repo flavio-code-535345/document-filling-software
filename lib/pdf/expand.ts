@@ -18,6 +18,19 @@ export async function expandPdfPages(bytes: Uint8Array | Buffer, originalPageCou
   return doc.save();
 }
 
+/** Builds a new PDF whose page `k` is a copy of the source document's page
+ * `sourceIndices[k]` — any order, any page any number of times. The general
+ * form of `expandPdfPages`, used by the fill route to lay out the exact pages
+ * an export needs (Endlos-Modus blocks plus month-end TN splits) from the
+ * original file in one pass. */
+export async function selectPdfPages(bytes: Uint8Array | Buffer, sourceIndices: number[]): Promise<Uint8Array> {
+  const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const out = await PDFDocument.create();
+  const copied = await out.copyPages(src, sourceIndices);
+  for (const p of copied) out.addPage(p);
+  return out.save();
+}
+
 /** Repeats a page-sizes or page-rotations array to match `expandPdfPages`'s
  * output — every block is identical to the original page set. */
 export function repeatPerPage<T>(original: T[], times: number): T[] {

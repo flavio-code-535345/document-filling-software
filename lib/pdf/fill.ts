@@ -77,10 +77,17 @@ export function wrapText(
   return lines;
 }
 
+/**
+ * `overrides` are applied on top of the computed formula results — used for
+ * struck ("gestrichen") timesheet cells (lib/timesheet.ts), which must print
+ * "–" even if the cell happens to carry a formula that would otherwise
+ * compute a 0.
+ */
 export async function fillPdf(
   template: StoredTemplate,
   values: FillValues,
-  templatePdfBytes: Uint8Array | Buffer
+  templatePdfBytes: Uint8Array | Buffer,
+  overrides?: FillValues
 ): Promise<Uint8Array> {
   const doc = await PDFDocument.load(templatePdfBytes, { ignoreEncryption: true });
   const boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -105,7 +112,7 @@ export async function fillPdf(
 
   // Compute formula fields server-side too (authoritative, independent of
   // whatever the client submitted for them).
-  const computedValues = evaluateFormulas(template.fields, values);
+  const computedValues = { ...evaluateFormulas(template.fields, values), ...overrides };
 
   for (const field of template.fields) {
     // Deactivated fields keep their placement in the template (so
