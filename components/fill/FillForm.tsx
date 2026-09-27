@@ -4,6 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FieldValue, SavedFill, StoredTemplate, TemplateField } from "@/lib/types";
 import { evaluateFormulas } from "@/lib/formula";
 import { expandFieldsForRepeat } from "@/lib/editor-utils";
+import {
+  DAY_DEFS,
+  buildTimesheetOutput,
+  detectColumn,
+  detectDay,
+  germanMonthName,
+  isoWeekDates,
+  isoWeekOf,
+  mondayOfIsoWeek,
+  type TimesheetColumn,
+} from "@/lib/timesheet";
 import type { PreviewValues } from "@/components/PreviewSvg";
 import PagePreview from "./PagePreview";
 import MatrixInput, { type MatrixSelection } from "./MatrixInput";
@@ -15,9 +26,6 @@ interface LinkedGroup {
   fields: TemplateField[];
 }
 
-/** The five fixed columns of a timesheet day block. */
-type TimesheetColumn = "datum" | "von" | "bis" | "pause" | "stunden";
-
 const COLUMN_ORDER: TimesheetColumn[] = ["datum", "von", "bis", "pause", "stunden"];
 
 const COLUMN_LABELS: Record<TimesheetColumn, string> = {
@@ -27,47 +35,6 @@ const COLUMN_LABELS: Record<TimesheetColumn, string> = {
   pause: "Pause",
   stunden: "Stunden",
 };
-
-/**
- * JavaScript's `\b` word boundary is ASCII-only: it treats "ä ö ü ß" (and
- * other accented letters) as non-word characters, so a word like
- * "Frühschicht" reads to `\b` as two tokens, "Fr" + "ühschicht" — letting a
- * bare two-letter day abbreviation like "fr" (Freitag) match *inside* an
- * unrelated German word purely because an umlaut happens to follow it. Build
- * day/column regexes with this Unicode-aware boundary instead, so a match
- * requires an actual accented-letter-aware word boundary on both sides.
- */
-const DE_WORD_CHAR = "[A-Za-zÀ-ÖØ-öø-ÿ]";
-function deWordRe(alternatives: string): RegExp {
-  return new RegExp(`(?<!${DE_WORD_CHAR})(?:${alternatives})(?!${DE_WORD_CHAR})`, "i");
-}
-
-const DAY_DEFS: { key: string; label: string; re: RegExp }[] = [
-  { key: "mo", label: "Montag", re: deWordRe("montag|mo") },
-  { key: "di", label: "Dienstag", re: deWordRe("dienstag|di") },
-  { key: "mi", label: "Mittwoch", re: deWordRe("mittwoch|mi") },
-  { key: "do", label: "Donnerstag", re: deWordRe("donnerstag|do") },
-  { key: "fr", label: "Freitag", re: deWordRe("freitag|fr") },
-  { key: "sa", label: "Samstag", re: deWordRe("samstag|sa") },
-  { key: "so", label: "Sonntag", re: deWordRe("sonntag|so") },
-];
-
-/** Resolve a field label to a day-of-week key ("mo"…"so"), or null. */
-function detectDay(label: string): string | null {
-  for (const d of DAY_DEFS) if (d.re.test(label)) return d.key;
-  return null;
-}
-
-/** Resolve a field label to one of the five timesheet columns, or null. */
-function detectColumn(label: string): TimesheetColumn | null {
-  const l = label.toLowerCase();
-  if (deWordRe("datum").test(l)) return "datum";
-  if (deWordRe("von|beginn|start|anfang").test(l)) return "von";
-  if (deWordRe("bis|ende").test(l)) return "bis";
-  if (deWordRe("pause").test(l)) return "pause";
-  if (deWordRe("stunden|arbeitszeit|gesamt").test(l)) return "stunden";
-  return null;
-}
 
 interface DayLayout {
   key: string;
@@ -165,46 +132,6 @@ function groupFields(fields: TemplateField[]): LinkedGroup[] {
     key: fields[0].linkKey ?? `${fields[0].kind}|${fields[0].label}`,
     fields,
   }));
-}
-
-/**
- * ISO-8601 dates of a calendar week (Monday-first), starting from `week`.
- * `count` isn't capped at 7 — a document with more than one week's worth of
- * date fields (e.g. a duplex two-week timesheet) just keeps counting into
- * the following week(s), Monday-first throughout.
- */
-function isoWeekDates(year: number, week: number, count: number): string[] {
-  const jan4 = Date.UTC(year, 0, 4);
-  const dow = new Date(jan4).getUTCDay();
-  const week1Monday = jan4 - ((dow + 6) % 7) * 86400000;
-  const monday = week1Monday + (week - 1) * 7 * 86400000;
-  const out: string[] = [];
-  for (let i = 0; i < Math.max(0, count); i++) {
-    out.push(new Date(monday + i * 86400000).toISOString().slice(0, 10));
-  }
-  return out;
-}
-
-/** The Monday of a given ISO week, as a Date — for adding/subtracting whole
- * weeks (e.g. deriving every other Datumsreihe panel's week from the anchor
- * panel's). */
-function mondayOfIsoWeek(year: number, week: number): Date {
-  return new Date(isoWeekDates(year, week, 1)[0]);
-}
-
-/**
- * ISO-8601 week number (Monday-first; week 1 is the week containing the
- * year's first Thursday) for a given date, via the standard "nearest
- * Thursday" trick: shifting to that Thursday makes the week/year unambiguous
- * even for the first/last days of a year.
- */
-function isoWeekOf(date: Date): { year: number; week: number } {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
-  const dayNum = d.getUTCDay() || 7; // Mon=1 … Sun=7
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-  const week = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-  return { year: d.getUTCFullYear(), week };
 }
 
 /** A "Kalenderwoche" field: labeled KW/Kalenderwoche and split into digit
@@ -855,10 +782,42 @@ export default function FillForm({
     [effectiveFields, values]
   );
 
-  const previewValues: PreviewValues = useMemo(
-    () => computedValues as PreviewValues,
-    [computedValues]
+  // What actually gets printed, in Tätigkeitsnachweis-Modus: the same
+  // month-end split / struck-day transformation the server applies at
+  // export (lib/timesheet.ts#buildTimesheetOutput, run on the same fields and
+  // raw values), so the preview shows the real TN pages — a week that
+  // straddles a month change appears as two sheets here too, each with its
+  // own Total-Std — rather than the single week being typed into. The form
+  // inputs themselves stay one section per week; only the output splits.
+  // Outside Tätigkeitsnachweis-Modus this is null and the preview is the
+  // input pages, exactly as before.
+  const timesheetOutput = useMemo(
+    () => (template.autoCurrentWeek ? buildTimesheetOutput(effectiveFields, effectivePageCount, values) : null),
+    [template.autoCurrentWeek, effectiveFields, effectivePageCount, values]
   );
+
+  const previewValues: PreviewValues = useMemo(() => {
+    if (!timesheetOutput) return computedValues as PreviewValues;
+    return {
+      ...evaluateFormulas(timesheetOutput.fields, timesheetOutput.values),
+      ...timesheetOutput.struck,
+    } as PreviewValues;
+  }, [computedValues, timesheetOutput]);
+
+  // One entry per printed page, grouped under the input page it came from,
+  // so the preview can keep iterating input pages in `displayOrder` (and
+  // their "Seite N" numbering, shared with the form sections above) while
+  // rendering however many TN sheets each one turned into.
+  const previewPagesBySource = useMemo(() => {
+    const map = new Map<number, { outPage: number; part: number; parts: number; month?: { year: number; month: number } }[]>();
+    if (timesheetOutput) {
+      timesheetOutput.pages.forEach((p, outPage) => {
+        if (!map.has(p.sourcePage)) map.set(p.sourcePage, []);
+        map.get(p.sourcePage)!.push({ outPage, part: p.part, parts: p.parts, month: p.month });
+      });
+    }
+    return map;
+  }, [timesheetOutput]);
 
   const jumpPreview = (page: number) => {
     const el = document.getElementById(`preview-page-${page}`);
@@ -1115,11 +1074,22 @@ export default function FillForm({
           {displayOrder.map((pageIndex) => {
             const layout = pageLayouts[pageIndex];
             if (!layout || (layout.general.length === 0 && layout.days.length === 0)) return null;
+            const splitParts = (previewPagesBySource.get(pageIndex) ?? []).filter((p) => p.parts > 1);
             return (
               <section key={pageIndex} className="rounded-xl border border-line bg-surface p-4">
                 <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-ink-dim">
                   Seite {displayPosition.get(pageIndex)}
                 </h2>
+                {splitParts.length > 1 && (
+                  // The inputs stay one week, but the output doesn't — say so,
+                  // or the week total shown here (all days) looks like it
+                  // disagrees with the two per-month totals in the preview.
+                  <p className="-mt-2 mb-4 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                    Diese Woche geht über den Monatswechsel und wird als {splitParts.length} Tätigkeitsnachweise
+                    ausgegeben ({splitParts.map((p) => (p.month ? germanMonthName(p.month.month) : "")).join(" / ")}) —
+                    jeder mit eigener Total-Std.; Tage des jeweils anderen Monats werden gestrichen.
+                  </p>
+                )}
 
                 {layout.general.length > 0 && (
                   <div className="flex flex-col space-y-4">
@@ -1221,30 +1191,47 @@ export default function FillForm({
         {/* Sticky preview column: the real PDF with filled values on top */}
         <div className="hidden lg:block">
           <div className="sticky top-24 space-y-6 self-start">
-            {displayOrder.map((i) => {
+            {displayOrder.flatMap((i) => {
               // Beyond the template's own pageCount, a virtual page is just
               // the same underlying PDF page rendered again — the file on
               // disk was never expanded, only the field list was (locally).
               const sourcePage = i % template.pageCount;
-              return (
+              // Without Tätigkeitsnachweis-Modus (or for a page the month
+              // split left alone) this is the input page itself; a split
+              // week renders as its TN sheets, one after the other, still
+              // under this page's "Seite N" so it lines up with the form.
+              const parts = previewPagesBySource.get(i) ?? [{ outPage: i, part: 1, parts: 1 }];
+              return parts.map(({ outPage, part, parts: partCount, month }) => (
                 <div
-                  key={i}
-                  id={`preview-page-${i}`}
+                  key={`${i}-${part}`}
+                  // Only the first sheet carries the id `jumpPreview` scrolls
+                  // to — focusing a field in this week lands on its start.
+                  id={part === 1 ? `preview-page-${i}` : undefined}
                   className="overflow-hidden rounded-lg border border-line"
                 >
                   <p className="border-b border-line bg-surface px-3 py-1 text-xs text-ink-dim">
                     Seite {displayPosition.get(i)}
+                    {partCount > 1 && month && (
+                      <span className="text-accent">
+                        {" "}
+                        · TN {part}/{partCount} ({germanMonthName(month.month)})
+                      </span>
+                    )}
                   </p>
                   <PagePreview
                     pdfUrl={`/api/templates/${template.id}/pdf?v=${encodeURIComponent(template.updatedAt)}`}
                     pageIndex={sourcePage}
                     pageSize={template.pageSizes[sourcePage] ?? { width: 612, height: 792 }}
-                    fields={visibleFields.filter((f) => f.page === i)}
+                    fields={
+                      timesheetOutput
+                        ? timesheetOutput.fields.filter((f) => f.page === outPage && !f.disabled)
+                        : visibleFields.filter((f) => f.page === i)
+                    }
                     values={previewValues}
                     rotation={template.pageRotations?.[sourcePage] ?? 0}
                   />
                 </div>
-              );
+              ));
             })}
           </div>
         </div>
